@@ -57,7 +57,7 @@ async def start_consumer(
     queue = await channel.declare_queue(
         queue_name,
         durable=True,
-        arguments={"x-message-ttl": 7 * 24 * 60 * 60 * 1000},
+        arguments={"x-message-ttl": settings.otp_expires_in_seconds * 1000},
     )
     await queue.bind(exchange, routing_key=topic)
 
