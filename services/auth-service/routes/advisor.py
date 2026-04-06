@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 import bcrypt as bcrypt_lib
 import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
+import httpx
 from pydantic import BaseModel, field_validator
 import re
 
@@ -19,6 +20,38 @@ logger = get_logger("auth-service")
 
 # Pre-computed at startup so the constant-time dummy check always has a valid hash
 _DUMMY_HASH: bytes = bcrypt_lib.hashpw(b"dummy-constant-time", bcrypt_lib.gensalt())
+
+
+async def _verify_otp_with_service(*, channel: str, destination: str, otp: str, user_id: str, user_type: str) -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{settings.otp_service_url}/otp/verify",
+                json={
+                    "channel": channel,
+                    "destination": destination,
+                    "otp": otp,
+                    "userId": user_id,
+                    "userType": user_type,
+                },
+            )
+    except httpx.HTTPError:
+        return {
+            "valid": False,
+            "error": "OTP service unavailable",
+            "reason": "service_unavailable",
+            "status_code": 503,
+        }
+    data = resp.json()
+    if resp.is_success:
+        return {"valid": True}
+    return {
+        "valid": False,
+        "error": data.get("error", "Invalid or expired OTP"),
+        "attemptsLeft": data.get("attemptsLeft"),
+        "reason": data.get("reason"),
+        "status_code": resp.status_code,
+    }
 
 
 class AdvisorLoginBody(BaseModel):
@@ -203,7 +236,13 @@ async def advisor_login(body: AdvisorLoginBody, request: Request):
     await r.setex(
         session_key,
         settings.otp_expires_in_seconds,
-        json.dumps({"advisorId": advisor["id"], "role": advisor["role"], "step": "awaiting_otp"}),
+        json.dumps({
+            "advisorId": advisor["id"],
+            "role": advisor["role"],
+            "step": "awaiting_otp",
+            "otpChannel": advisor["otpChannel"],
+            "otpTarget": advisor["otpTarget"],
+        }),
     )
 
     await publish_event("auth.otp.requested", {
@@ -256,17 +295,26 @@ async def advisor_verify_otp(body: AdvisorVerifyOTPBody, request: Request, respo
         )
         raise HTTPException(400, "Invalid session state")
 
-    otp_key = f"otp:{session['advisorId']}"
-    stored_otp = await r.get(otp_key)
+    verification = await _verify_otp_with_service(
+        channel=session["otpChannel"],
+        destination=session["otpTarget"],
+        otp=body.otp,
+        user_id=session["advisorId"],
+        user_type="advisor",
+    )
 
-    if not stored_otp or stored_otp != body.otp:
+    if not verification["valid"]:
         logger.warning(
             "advisor_otp_verify_failed",
-            extra={"reason": "invalid_otp", "advisor_id": session["advisorId"], "ip": ip},
+            extra={
+                "reason": verification.get("reason", "invalid_otp"),
+                "advisor_id": session["advisorId"],
+                "ip": ip,
+            },
         )
-        raise HTTPException(400, "Invalid or expired OTP")
+        raise HTTPException(verification.get("status_code", 400), verification["error"])
 
-    await r.delete(otp_key, session_key)
+    await r.delete(session_key)
 
     new_session_id = str(uuid.uuid4())
     access_token = sign_access_token(session["advisorId"], "advisor", session["role"], new_session_id)
