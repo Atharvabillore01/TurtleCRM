@@ -54,6 +54,39 @@ async def _verify_otp_with_service(*, channel: str, destination: str, otp: str, 
     }
 
 
+async def _verify_otp_with_service(*, channel: str, destination: str, otp: str, user_id: str, user_type: str) -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{settings.otp_service_url}/otp/verify",
+                json={
+                    "channel": channel,
+                    "destination": destination,
+                    "otp": otp,
+                    "userId": user_id,
+                    "userType": user_type,
+                },
+            )
+    except httpx.HTTPError:
+        return {
+            "valid": False,
+            "error": "OTP service unavailable",
+            "reason": "service_unavailable",
+            "status_code": 503,
+        }
+
+    data = resp.json()
+    if resp.is_success:
+        return {"valid": True}
+    return {
+        "valid": False,
+        "error": data.get("error", "Invalid or expired OTP"),
+        "attemptsLeft": data.get("attemptsLeft"),
+        "reason": data.get("reason"),
+        "status_code": resp.status_code,
+    }
+
+
 class AdvisorLoginBody(BaseModel):
     username: str
     password: str
