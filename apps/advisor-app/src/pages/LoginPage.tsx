@@ -172,8 +172,16 @@ export function LoginPage() {
           )}
         </div>
 
-        {/* Footer */}
+        {/* Register link */}
         <p className="text-center text-xs text-gray-500 mt-4">
+          New advisor?{" "}
+          <Link to="/register" className="text-brand-700 hover:underline font-medium">
+            Create an account
+          </Link>
+        </p>
+
+        {/* Footer */}
+        <p className="text-center text-xs text-gray-500 mt-2">
           For internal use only · Turtle Corporate
         </p>
       </div>
