@@ -37,6 +37,7 @@ async def _verify_otp_with_service(*, channel: str, destination: str, otp: str, 
             "reason": "service_unavailable",
             "status_code": 503,
         }
+
     data = resp.json()
     if resp.is_success:
         return {"valid": True}
