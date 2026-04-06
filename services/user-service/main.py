@@ -5,7 +5,7 @@ from fastapi import FastAPI, HTTPException, Request, Depends
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from passlib.context import CryptContext
+import bcrypt as bcrypt_lib
 
 from config import settings
 from database import get_db, create_tables
@@ -13,7 +13,6 @@ from models import User, Advisor
 from logger import get_logger
 
 logger = get_logger("user-service")
-pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 @asynccontextmanager
@@ -87,7 +86,7 @@ class CreateAdvisorBody(BaseModel):
 
 @app.post("/advisors", status_code=201)
 async def create_advisor(body: CreateAdvisorBody, db: AsyncSession = Depends(get_db)):
-    hash_ = pwd_ctx.hash(body.password)
+    hash_ = bcrypt_lib.hashpw(body.password.encode(), bcrypt_lib.gensalt()).decode()
     advisor = Advisor(
         username=body.username,
         email=body.email,

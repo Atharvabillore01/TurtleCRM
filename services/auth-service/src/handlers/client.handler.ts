@@ -13,6 +13,33 @@ import { otpConfig } from "@turtle/config";
 import type { RequestOTPBody, VerifyOTPBody } from "../schemas/client.schema.js";
 
 const OTP_TTL = otpConfig().expiresSeconds;
+const OTP_SERVICE_URL = process.env["OTP_SERVICE_URL"] ?? "http://otp-service:4001";
+
+async function verifyOTPWithService(body: {
+  channel: "sms" | "email";
+  destination: string;
+  otp: string;
+  userId: string;
+  userType: "client" | "advisor";
+}): Promise<{ valid: boolean; error?: string; attemptsLeft?: number; reason?: string }> {
+  const res = await fetch(`${OTP_SERVICE_URL}/otp/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  const data = (await res.json()) as { valid?: boolean; error?: string; attemptsLeft?: number; reason?: string };
+  if (res.ok) {
+    return { valid: true };
+  }
+
+  return {
+    valid: false,
+    error: data.error ?? "Invalid or expired OTP",
+    attemptsLeft: data.attemptsLeft,
+    reason: data.reason,
+  };
+}
 
 // ─── POST /auth/client/request-otp ───────────────────────────────────────────
 
@@ -58,28 +85,44 @@ export async function verifyOTP(
   const { requestId, destination, otp } = request.body;
   const redis = getRedis();
 
-  // 1. Look up stored OTP (written by otp-service after consuming the event)
-  const otpKey      = `otp:${destination}`;
   const pendingKey  = `otp:pending:${requestId}`;
 
-  const [storedOTP, pendingRaw] = await Promise.all([
-    redis.get(otpKey),
-    redis.get(pendingKey),
-  ]);
+  const pendingRaw = await redis.get(pendingKey);
 
   if (!pendingRaw) {
     return reply.status(400).send({ error: "OTP request not found or expired" });
   }
 
-  if (!storedOTP || storedOTP !== otp) {
-    return reply.status(400).send({ error: "Invalid or expired OTP" });
+  const pending = JSON.parse(pendingRaw) as {
+    channel: "sms" | "email";
+    destination: string;
+    verified: boolean;
+  };
+
+  if (pending.destination !== destination) {
+    return reply.status(400).send({ error: "Destination does not match OTP request" });
+  }
+
+  const verification = await verifyOTPWithService({
+    channel: pending.channel,
+    destination,
+    otp,
+    userId: destination,
+    userType: "client",
+  });
+
+  if (!verification.valid) {
+    return reply.status(
+      verification.reason === "max_attempts" ? 429 : 400
+    ).send({
+      error: verification.error ?? "Invalid or expired OTP",
+      attemptsLeft: verification.attemptsLeft,
+      reason: verification.reason,
+    });
   }
 
   // 2. OTP valid — clean up
-  await Promise.all([
-    redis.del(otpKey),
-    redis.del(pendingKey),
-  ]);
+  await redis.del(pendingKey);
 
   // 3. Resolve or create user via user-service (simplified: use destination as userId)
   const userId    = destination;
@@ -96,7 +139,7 @@ export async function verifyOTP(
   await publishEvent({
     topic:      KafkaTopics.OTPVerified,
     userId,
-    channel:    request.body.destination.includes("@") ? "email" : "sms",
+    channel:    pending.channel,
     userType:   "client",
     verifiedAt: new Date().toISOString(),
   });
