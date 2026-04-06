@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request, Depends
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 import bcrypt as bcrypt_lib
 
@@ -95,7 +96,11 @@ async def create_advisor(body: CreateAdvisorBody, db: AsyncSession = Depends(get
         otp_target=body.otp_target,
     )
     db.add(advisor)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(409, "Username or email already exists")
     await db.refresh(advisor)
     logger.info("advisor_created", extra={"advisor_id": advisor.id, "username": advisor.username})
     return {"id": advisor.id, "username": advisor.username, "email": advisor.email}
