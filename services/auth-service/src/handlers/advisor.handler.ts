@@ -14,6 +14,33 @@ import { otpConfig } from "@turtle/config";
 import type { AdvisorLoginBody, AdvisorVerifyOTPBody } from "../schemas/advisor.schema.js";
 
 const OTP_TTL = otpConfig().expiresSeconds;
+const OTP_SERVICE_URL = process.env["OTP_SERVICE_URL"] ?? "http://otp-service:4001";
+
+async function verifyOTPWithService(body: {
+  channel: "sms" | "email";
+  destination: string;
+  otp: string;
+  userId: string;
+  userType: "client" | "advisor";
+}): Promise<{ valid: boolean; error?: string; attemptsLeft?: number; reason?: string }> {
+  const res = await fetch(`${OTP_SERVICE_URL}/otp/verify`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  const data = (await res.json()) as { valid?: boolean; error?: string; attemptsLeft?: number; reason?: string };
+  if (res.ok) {
+    return { valid: true };
+  }
+
+  return {
+    valid: false,
+    error: data.error ?? "Invalid or expired OTP",
+    attemptsLeft: data.attemptsLeft,
+    reason: data.reason,
+  };
+}
 
 // Stub: replace with actual user-service call
 async function findAdvisorByUsername(
@@ -76,7 +103,13 @@ export async function advisorLogin(
   await redis.setex(
     sessionKey,
     OTP_TTL,
-    JSON.stringify({ advisorId: advisor.id, role: advisor.role, step: "awaiting_otp" })
+    JSON.stringify({
+      advisorId: advisor.id,
+      role: advisor.role,
+      step: "awaiting_otp",
+      otpChannel: advisor.otpChannel,
+      otpTarget: advisor.otpTarget,
+    })
   );
 
   // Publish OTP requested — otp-service will send to advisor's registered channel
@@ -119,22 +152,34 @@ export async function advisorVerifyOTP(
     advisorId: string;
     role:      string;
     step:      string;
+    otpChannel: "sms" | "email";
+    otpTarget: string;
   };
 
   if (session.step !== "awaiting_otp") {
     return reply.status(400).send({ error: "Invalid session state" });
   }
 
-  // 2. Validate OTP (written by otp-service for this advisorId)
-  const otpKey   = `otp:${session.advisorId}`;
-  const storedOTP = await redis.get(otpKey);
+  const verification = await verifyOTPWithService({
+    channel: session.otpChannel,
+    destination: session.otpTarget,
+    otp,
+    userId: session.advisorId,
+    userType: "advisor",
+  });
 
-  if (!storedOTP || storedOTP !== otp) {
-    return reply.status(400).send({ error: "Invalid or expired OTP" });
+  if (!verification.valid) {
+    return reply.status(
+      verification.reason === "max_attempts" ? 429 : 400
+    ).send({
+      error: verification.error ?? "Invalid or expired OTP",
+      attemptsLeft: verification.attemptsLeft,
+      reason: verification.reason,
+    });
   }
 
   // 3. Clean up
-  await Promise.all([redis.del(otpKey), redis.del(sessionKey)]);
+  await redis.del(sessionKey);
 
   // 4. Issue tokens
   const newSessionId = randomUUID();
