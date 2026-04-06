@@ -14,7 +14,7 @@ class Settings(BaseSettings):
 
     otp_expires_in_seconds: int = 300
     otp_length: int = 6
-    otp_provider: str = "mock"
+    otp_provider: str = "twilio"
 
     # Twilio
     twilio_account_sid: str = ""
@@ -33,20 +33,15 @@ class Settings(BaseSettings):
     msg91_sender_id: str = ""
     msg91_template_id: str = ""
 
-    # Gupshup
-    gupshup_api_key: str = ""
-    gupshup_sender_id: str = ""
-    gupshup_app_name: str = ""
-
     # Haptic
     haptic_api_key: str = ""
     haptic_sender_id: str = ""
     haptic_base_url: str = ""
 
-    # Infobit
-    infobit_api_key: str = ""
-    infobit_sender_id: str = ""
-    infobit_base_url: str = ""
+    # Infobip
+    infobip_api_key: str = ""
+    infobip_sender_id: str = ""
+    infobip_base_url: str = "https://api.infobip.com"
 
 
 settings = Settings()

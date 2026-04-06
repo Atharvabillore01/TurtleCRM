@@ -55,7 +55,13 @@ export interface EventBusConfig {
   rabbitmq:  RabbitMQConfig;
 }
 
-export type OTPProvider = "twilio" | "aws" | "msg91" | "mock";
+export type OTPProvider =
+  | "twilio"
+  | "aws"
+  | "msg91"
+  | "haptic"
+  | "infobip"
+  | "mock";
 
 export interface TwilioConfig {
   accountSid:  string;
@@ -76,6 +82,18 @@ export interface MSG91Config {
   templateId: string;
 }
 
+export interface HapticConfig {
+  apiKey:   string;
+  senderId: string;
+  baseUrl:  string;
+}
+
+export interface InfobipConfig {
+  apiKey:   string;
+  senderId: string;
+  baseUrl:  string;
+}
+
 export interface OTPConfig {
   provider:       OTPProvider;
   expiresSeconds: number;
@@ -83,6 +101,8 @@ export interface OTPConfig {
   twilio:         Partial<TwilioConfig>;
   aws:            Partial<AWSConfig>;
   msg91:          Partial<MSG91Config>;
+  haptic:         Partial<HapticConfig>;
+  infobip:        Partial<InfobipConfig>;
 }
 
 export interface OAuthConfig {
@@ -154,7 +174,7 @@ export function eventBusConfig(clientId: string, groupId: string): EventBusConfi
 }
 
 export function otpConfig(): OTPConfig {
-  const provider = optional("OTP_PROVIDER", "mock") as OTPProvider;
+  const provider = optional("OTP_PROVIDER", "infobip") as OTPProvider;
   return {
     provider,
     expiresSeconds: parseInt(optional("OTP_EXPIRES_IN_SECONDS", "300"), 10),
@@ -173,6 +193,16 @@ export function otpConfig(): OTPConfig {
       authKey:    process.env["MSG91_AUTH_KEY"],
       senderId:   process.env["MSG91_SENDER_ID"],
       templateId: process.env["MSG91_TEMPLATE_ID"],
+    },
+    haptic: {
+      apiKey:   process.env["HAPTIC_API_KEY"],
+      senderId: process.env["HAPTIC_SENDER_ID"],
+      baseUrl:  process.env["HAPTIC_BASE_URL"],
+    },
+    infobip: {
+      apiKey:   process.env["INFOBIP_API_KEY"],
+      senderId: process.env["INFOBIP_SENDER_ID"],
+      baseUrl:  process.env["INFOBIP_BASE_URL"],
     },
   };
 }

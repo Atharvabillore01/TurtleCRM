@@ -46,13 +46,13 @@ All services start in dependency order. When ready:
 Set `OTP_PROVIDER` in `.env` before running:
 
 ```bash
-OTP_PROVIDER=mock     # Default — prints OTP to service logs (no credentials needed)
+OTP_PROVIDER=infobip  # Default for this setup -> requires INFOBIP_API_KEY, INFOBIP_SENDER_ID, INFOBIP_BASE_URL
+OTP_PROVIDER=mock     # Prints OTP to service logs (no credentials needed)
 OTP_PROVIDER=twilio   # Twilio SMS → requires TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_FROM_NUMBER
 OTP_PROVIDER=aws      # AWS SNS (SMS) + SES (email) → requires AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
 OTP_PROVIDER=msg91    # MSG91 → India-focused → requires MSG91_AUTH_KEY, MSG91_SENDER_ID, MSG91_TEMPLATE_ID
-OTP_PROVIDER=gupshup  # Gupshup SMS/WhatsApp → requires GUPSHUP_API_KEY, GUPSHUP_SENDER_ID, GUPSHUP_APP_NAME
 OTP_PROVIDER=haptic   # Haptic SMS → requires HAPTIC_API_KEY, HAPTIC_SENDER_ID, HAPTIC_BASE_URL
-OTP_PROVIDER=infobit  # Infobit SMS → requires INFOBIT_API_KEY, INFOBIT_SENDER_ID, INFOBIT_BASE_URL
+OTP_PROVIDER=infobip  # Infobip SMS/email -> requires INFOBIP_API_KEY, INFOBIP_SENDER_ID, INFOBIP_BASE_URL
 ```
 
 In `mock` mode the OTP prints to otp-service logs:
@@ -128,3 +128,4 @@ Copy `.env.example` to `.env` and fill in:
 - **SENDGRID_API_KEY** — for email OTP and notifications
 
 All other variables have working defaults for local development.
+
