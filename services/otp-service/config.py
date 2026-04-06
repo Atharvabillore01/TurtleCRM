@@ -14,7 +14,9 @@ class Settings(BaseSettings):
 
     otp_expires_in_seconds: int = 300
     otp_length: int = 6
-    otp_provider: str = "mock"
+    otp_provider: str = "twilio"
+    otp_rate_limit_max_requests: int = 3
+    otp_rate_limit_window_secs: int = 15 * 60
 
     # Twilio
     twilio_account_sid: str = ""

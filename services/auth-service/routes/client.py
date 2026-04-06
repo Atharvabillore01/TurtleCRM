@@ -3,6 +3,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Response
+import httpx
 from pydantic import BaseModel, field_validator
 import re
 
@@ -14,6 +15,39 @@ from logger import get_logger
 
 router = APIRouter(prefix="/auth/client", tags=["client"])
 logger = get_logger("auth-service")
+
+
+async def _verify_otp_with_service(*, channel: str, destination: str, otp: str, user_id: str, user_type: str) -> dict:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(
+                f"{settings.otp_service_url}/otp/verify",
+                json={
+                    "channel": channel,
+                    "destination": destination,
+                    "otp": otp,
+                    "userId": user_id,
+                    "userType": user_type,
+                },
+            )
+    except httpx.HTTPError:
+        return {
+            "valid": False,
+            "error": "OTP service unavailable",
+            "reason": "service_unavailable",
+            "status_code": 503,
+        }
+
+    data = resp.json()
+    if resp.is_success:
+        return {"valid": True}
+    return {
+        "valid": False,
+        "error": data.get("error", "Invalid or expired OTP"),
+        "attemptsLeft": data.get("attemptsLeft"),
+        "reason": data.get("reason"),
+        "status_code": resp.status_code,
+    }
 
 
 def _mask(dest: str) -> str:
@@ -100,10 +134,8 @@ async def request_otp(body: RequestOTPBody):
 async def verify_otp(body: VerifyOTPBody, response: Response):
     r = get_redis()
 
-    otp_key = f"otp:{body.destination}"
     pending_key = f"otp:pending:{body.requestId}"
-
-    stored_otp, pending_raw = await r.mget(otp_key, pending_key)
+    pending_raw = await r.get(pending_key)
 
     if not pending_raw:
         logger.warning(
@@ -112,18 +144,39 @@ async def verify_otp(body: VerifyOTPBody, response: Response):
         )
         raise HTTPException(400, "OTP request not found or expired")
 
-    if not stored_otp or stored_otp != body.otp:
+    pending = json.loads(pending_raw)
+
+    if pending["destination"] != body.destination:
         logger.warning(
             "otp_verify_failed",
             extra={
-                "reason": "invalid_otp",
+                "reason": "destination_mismatch",
                 "request_id": body.requestId,
                 "destination": _mask(body.destination),
             },
         )
-        raise HTTPException(400, "Invalid or expired OTP")
+        raise HTTPException(400, "Destination does not match OTP request")
 
-    await r.delete(otp_key, pending_key)
+    verification = await _verify_otp_with_service(
+        channel=pending["channel"],
+        destination=body.destination,
+        otp=body.otp,
+        user_id=body.destination,
+        user_type="client",
+    )
+
+    if not verification["valid"]:
+        logger.warning(
+            "otp_verify_failed",
+            extra={
+                "reason": verification.get("reason", "invalid_otp"),
+                "request_id": body.requestId,
+                "destination": _mask(body.destination),
+            },
+        )
+        raise HTTPException(verification.get("status_code", 400), verification["error"])
+
+    await r.delete(pending_key)
 
     user_id = body.destination
     session_id = str(uuid.uuid4())
@@ -136,7 +189,7 @@ async def verify_otp(body: VerifyOTPBody, response: Response):
     await publish_event("auth.otp.verified", {
         "topic": "auth.otp.verified",
         "userId": user_id,
-        "channel": body.destination,
+        "channel": pending["channel"],
         "userType": "client",
         "verifiedAt": datetime.now(timezone.utc).isoformat(),
     })
