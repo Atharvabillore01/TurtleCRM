@@ -1,5 +1,5 @@
 import asyncio
-import logging
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
@@ -17,9 +17,9 @@ from otp.store import store_otp
 from providers.factory import get_otp_provider
 from eventbus import start_consumer, disconnect_publisher, publish_event
 from consumer import handle_otp_requested
+from logger import get_logger
 
-logging.basicConfig(level=logging.DEBUG if settings.node_env != "production" else logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger("otp-service")
 
 _consumer_task: asyncio.Task | None = None
 
@@ -34,7 +34,7 @@ async def lifespan(app: FastAPI):
             handler=handle_otp_requested,
         )
     )
-    logger.info("[otp-service] started")
+    logger.info("otp-service started", extra={"provider": settings.otp_provider, "env": settings.node_env})
     yield
     if _consumer_task:
         _consumer_task.cancel()
@@ -43,10 +43,28 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
     await asyncio.gather(disconnect_publisher(), close_redis(), return_exceptions=True)
-    logger.info("[otp-service] shut down")
+    logger.info("otp-service shut down")
 
 
 app = FastAPI(title="otp-service", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = round((time.perf_counter() - start) * 1000, 2)
+    logger.info(
+        "http_request",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": response.status_code,
+            "duration_ms": duration_ms,
+            "client_ip": request.client.host if request.client else "unknown",
+        },
+    )
+    return response
 
 
 class SendOTPBody(BaseModel):
@@ -89,6 +107,10 @@ async def send_otp(body: SendOTPBody):
 
     rate = await check_rate_limit(r, body.destination)
     if not rate.allowed:
+        logger.warning(
+            "otp_rate_limited",
+            extra={"destination": body.destination, "retry_after": rate.retry_after},
+        )
         return JSONResponse(
             status_code=429,
             content={"error": "Too many OTP requests", "retryAfter": rate.retry_after},
@@ -102,6 +124,16 @@ async def send_otp(body: SendOTPBody):
         await provider.send_sms(body.destination, otp)
     else:
         await provider.send_email(body.destination, otp)
+
+    logger.info(
+        "otp_sent",
+        extra={
+            "channel": body.channel,
+            "user_id": body.userId,
+            "user_type": body.userType,
+            "provider": settings.otp_provider,
+        },
+    )
 
     return {"message": "OTP sent", "expiresIn": settings.otp_expires_in_seconds}
 
@@ -121,6 +153,15 @@ async def verify_otp(body: VerifyOTPBody):
 
     if not result.valid:
         status = 429 if result.reason == "max_attempts" else 400
+        logger.warning(
+            "otp_verification_failed",
+            extra={
+                "reason": result.reason,
+                "attempts_left": result.attempts_left,
+                "user_id": body.userId,
+                "channel": body.channel,
+            },
+        )
         return JSONResponse(
             status_code=status,
             content={
@@ -133,6 +174,11 @@ async def verify_otp(body: VerifyOTPBody):
                 "reason": result.reason,
             },
         )
+
+    logger.info(
+        "otp_verified",
+        extra={"user_id": body.userId, "channel": body.channel, "user_type": body.userType},
+    )
 
     return {"valid": True}
 

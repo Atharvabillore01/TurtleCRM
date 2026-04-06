@@ -1,5 +1,5 @@
 import asyncio
-import logging
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -14,16 +14,16 @@ from routes.client import router as client_router
 from routes.advisor import router as advisor_router
 from routes.oauth import router as oauth_router
 from routes.refresh import router as refresh_router
+from logger import get_logger
 
-logging.basicConfig(level=logging.DEBUG if settings.node_env != "production" else logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger("auth-service")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    logger.info("[auth-service] starting up")
+    logger.info("auth-service starting up", extra={"env": settings.node_env})
     yield
-    logger.info("[auth-service] shutting down")
+    logger.info("auth-service shutting down")
     await asyncio.gather(disconnect(), close_redis(), return_exceptions=True)
 
 
@@ -38,8 +38,30 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = round((time.perf_counter() - start) * 1000, 2)
+    logger.info(
+        "http_request",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": response.status_code,
+            "duration_ms": duration_ms,
+            "client_ip": request.client.host if request.client else "unknown",
+        },
+    )
+    return response
+
+
 @app.exception_handler(ValidationError)
 async def validation_error_handler(request: Request, exc: ValidationError):
+    logger.warning(
+        "validation_error",
+        extra={"path": request.url.path, "errors": exc.errors()},
+    )
     return JSONResponse(
         status_code=422,
         content={

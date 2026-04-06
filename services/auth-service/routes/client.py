@@ -10,8 +10,18 @@ from redis_client import get_redis
 from jwt_utils import sign_access_token, sign_refresh_token, refresh_token_key, refresh_token_ttl
 from eventbus import publish_event
 from config import settings
+from logger import get_logger
 
 router = APIRouter(prefix="/auth/client", tags=["client"])
+logger = get_logger("auth-service")
+
+
+def _mask(dest: str) -> str:
+    """Mask a phone number or email for safe log output."""
+    if "@" in dest:
+        user, domain = dest.split("@", 1)
+        return f"{user[:1]}***@{domain}"
+    return f"{dest[:2]}****{dest[-4:]}" if len(dest) > 6 else "****"
 
 
 class RequestOTPBody(BaseModel):
@@ -69,6 +79,16 @@ async def request_otp(body: RequestOTPBody):
         "requestedAt": datetime.now(timezone.utc).isoformat(),
     })
 
+    logger.info(
+        "otp_requested",
+        extra={
+            "request_id": request_id,
+            "channel": body.channel,
+            "destination": _mask(body.destination),
+            "expires_in": settings.otp_expires_in_seconds,
+        },
+    )
+
     return {
         "requestId": request_id,
         "expiresIn": settings.otp_expires_in_seconds,
@@ -86,9 +106,21 @@ async def verify_otp(body: VerifyOTPBody, response: Response):
     stored_otp, pending_raw = await r.mget(otp_key, pending_key)
 
     if not pending_raw:
+        logger.warning(
+            "otp_verify_failed",
+            extra={"reason": "request_not_found", "request_id": body.requestId},
+        )
         raise HTTPException(400, "OTP request not found or expired")
 
     if not stored_otp or stored_otp != body.otp:
+        logger.warning(
+            "otp_verify_failed",
+            extra={
+                "reason": "invalid_otp",
+                "request_id": body.requestId,
+                "destination": _mask(body.destination),
+            },
+        )
         raise HTTPException(400, "Invalid or expired OTP")
 
     await r.delete(otp_key, pending_key)
@@ -108,6 +140,15 @@ async def verify_otp(body: VerifyOTPBody, response: Response):
         "userType": "client",
         "verifiedAt": datetime.now(timezone.utc).isoformat(),
     })
+
+    logger.info(
+        "otp_verified",
+        extra={
+            "user_id": _mask(user_id),
+            "session_id": session_id,
+            "user_type": "client",
+        },
+    )
 
     response.set_cookie(
         "access_token",

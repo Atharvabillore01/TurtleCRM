@@ -1,7 +1,7 @@
-import logging
+import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Request, Depends
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,20 +10,39 @@ from passlib.context import CryptContext
 from config import settings
 from database import get_db, create_tables
 from models import User, Advisor
+from logger import get_logger
 
-logging.basicConfig(level=logging.DEBUG if settings.node_env != "production" else logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger("user-service")
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await create_tables()
-    logger.info("[user-service] tables ready")
+    logger.info("user-service started", extra={"env": settings.node_env})
     yield
+    logger.info("user-service shut down")
 
 
 app = FastAPI(title="user-service", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = round((time.perf_counter() - start) * 1000, 2)
+    logger.info(
+        "http_request",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": response.status_code,
+            "duration_ms": duration_ms,
+            "client_ip": request.client.host if request.client else "unknown",
+        },
+    )
+    return response
 
 
 # ─── Users (clients) ──────────────────────────────────────────────────────────
@@ -36,11 +55,13 @@ class CreateUserBody(BaseModel):
 @app.post("/users", status_code=201)
 async def create_user(body: CreateUserBody, db: AsyncSession = Depends(get_db)):
     if not body.phone and not body.email:
+        logger.warning("create_user_failed", extra={"reason": "missing_phone_and_email"})
         raise HTTPException(400, "phone or email is required")
     user = User(phone=body.phone, email=body.email)
     db.add(user)
     await db.commit()
     await db.refresh(user)
+    logger.info("user_created", extra={"user_id": user.id})
     return {"id": user.id, "phone": user.phone, "email": user.email}
 
 
@@ -48,7 +69,9 @@ async def create_user(body: CreateUserBody, db: AsyncSession = Depends(get_db)):
 async def get_user(user_id: str, db: AsyncSession = Depends(get_db)):
     user = await db.get(User, user_id)
     if not user:
+        logger.warning("user_not_found", extra={"user_id": user_id})
         raise HTTPException(404, "User not found")
+    logger.debug("user_fetched", extra={"user_id": user_id})
     return {"id": user.id, "phone": user.phone, "email": user.email, "isActive": user.is_active}
 
 
@@ -75,6 +98,7 @@ async def create_advisor(body: CreateAdvisorBody, db: AsyncSession = Depends(get
     db.add(advisor)
     await db.commit()
     await db.refresh(advisor)
+    logger.info("advisor_created", extra={"advisor_id": advisor.id, "username": advisor.username})
     return {"id": advisor.id, "username": advisor.username, "email": advisor.email}
 
 
@@ -83,7 +107,9 @@ async def get_advisor_by_username(username: str, db: AsyncSession = Depends(get_
     result = await db.execute(select(Advisor).where(Advisor.username == username))
     advisor = result.scalar_one_or_none()
     if not advisor:
+        logger.warning("advisor_not_found", extra={"username": username})
         raise HTTPException(404, "Advisor not found")
+    logger.debug("advisor_fetched", extra={"advisor_id": advisor.id, "username": username})
     return {
         "id": advisor.id,
         "username": advisor.username,

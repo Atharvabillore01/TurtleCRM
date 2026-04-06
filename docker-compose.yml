@@ -55,6 +55,9 @@ services:
       OTP_SERVICE_URL: http://otp-service:4001
       USER_SERVICE_URL: http://user-service:4002
       NOTIFICATION_SERVICE_URL: http://notification-service:4003
+    volumes:
+      - ./logs/auth-service:/app/logs
+      - ./logs/combined:/app/logs/combined
     depends_on:
       redis:
         condition: service_healthy
@@ -79,6 +82,9 @@ services:
       NODE_ENV: production
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       RABBITMQ_URL: amqp://turtle:${RABBITMQ_PASS:-changeme}@rabbitmq:5672
+    volumes:
+      - ./logs/otp-service:/app/logs
+      - ./logs/combined:/app/logs/combined
     depends_on:
       redis:
         condition: service_healthy
@@ -101,6 +107,9 @@ services:
     env_file: .env
     environment:
       NODE_ENV: production
+    volumes:
+      - ./logs/user-service:/app/logs
+      - ./logs/combined:/app/logs/combined
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4002/health')\""]
       interval: 15s
@@ -119,6 +128,9 @@ services:
     environment:
       NODE_ENV: production
       RABBITMQ_URL: amqp://turtle:${RABBITMQ_PASS:-changeme}@rabbitmq:5672
+    volumes:
+      - ./logs/notification-service:/app/logs
+      - ./logs/combined:/app/logs/combined
     depends_on:
       rabbitmq:
         condition: service_healthy

@@ -1,14 +1,13 @@
 import secrets
-from passlib.context import CryptContext
-from config import settings
 
-pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+import bcrypt
+
+from config import settings
 
 
 def generate_otp() -> tuple[str, str]:
     """Returns (plain_otp, bcrypt_hash)."""
     length = settings.otp_length
-    max_val = 10 ** length
-    otp = str(secrets.randbelow(max_val)).zfill(length)
-    hash_ = pwd_ctx.hash(otp)
+    otp = str(secrets.randbelow(10 ** length)).zfill(length)
+    hash_ = bcrypt.hashpw(otp.encode(), bcrypt.gensalt()).decode()
     return otp, hash_

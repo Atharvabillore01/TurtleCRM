@@ -15,8 +15,10 @@ from jwt_utils import (
 )
 from eventbus import publish_event
 from config import settings
+from logger import get_logger
 
 router = APIRouter(tags=["auth"])
+logger = get_logger("auth-service")
 
 
 class RefreshBody(BaseModel):
@@ -32,6 +34,7 @@ async def refresh_tokens(body: RefreshBody, response: Response):
     try:
         payload = verify_refresh_token(body.refreshToken)
     except JWTError:
+        logger.warning("token_refresh_failed", extra={"reason": "invalid_or_expired_token"})
         raise HTTPException(401, "Invalid or expired refresh token")
 
     user_id = payload["userId"]
@@ -43,6 +46,10 @@ async def refresh_tokens(body: RefreshBody, response: Response):
     stored = await r.get(key)
 
     if not stored:
+        logger.warning(
+            "token_refresh_failed",
+            extra={"reason": "token_revoked_or_used", "user_id": user_id},
+        )
         raise HTTPException(401, "Refresh token revoked or already used")
 
     await r.delete(key)
@@ -59,6 +66,11 @@ async def refresh_tokens(body: RefreshBody, response: Response):
         "sessionId": new_session_id,
         "refreshedAt": datetime.now(timezone.utc).isoformat(),
     })
+
+    logger.info(
+        "token_refreshed",
+        extra={"user_id": user_id, "new_session_id": new_session_id},
+    )
 
     response.set_cookie(
         "access_token",
@@ -80,8 +92,9 @@ async def logout(body: LogoutBody, response: Response):
             payload = verify_refresh_token(body.refreshToken)
             key = refresh_token_key(payload["userId"], payload["tokenId"])
             await get_redis().delete(key)
+            logger.info("logout", extra={"user_id": payload["userId"]})
         except JWTError:
-            pass
+            logger.warning("logout_with_invalid_token")
 
     response.delete_cookie("access_token", path="/")
     return {"message": "Logged out"}

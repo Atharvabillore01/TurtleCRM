@@ -11,9 +11,11 @@ from redis_client import get_redis
 from jwt_utils import sign_access_token, sign_refresh_token, refresh_token_key, refresh_token_ttl
 from eventbus import publish_event
 from config import settings
+from logger import get_logger
 
 router = APIRouter(prefix="/auth/advisor", tags=["advisor"])
 pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
+logger = get_logger("auth-service")
 
 
 class AdvisorLoginBody(BaseModel):
@@ -58,6 +60,11 @@ async def advisor_login(body: AdvisorLoginBody, request: Request):
     ip = request.client.host if request.client else "unknown"
     user_agent = request.headers.get("user-agent", "")
 
+    logger.info(
+        "advisor_login_attempt",
+        extra={"username": body.username, "ip": ip},
+    )
+
     advisor = await _find_advisor(body.username)
 
     if not advisor:
@@ -73,6 +80,10 @@ async def advisor_login(body: AdvisorLoginBody, request: Request):
             "userAgent": user_agent,
             "failedAt": datetime.now(timezone.utc).isoformat(),
         })
+        logger.warning(
+            "advisor_login_failed",
+            extra={"reason": "user_not_found", "username": body.username, "ip": ip},
+        )
         raise HTTPException(401, "Invalid credentials")
 
     if not pwd_ctx.verify(body.password, advisor["passwordHash"]):
@@ -86,6 +97,10 @@ async def advisor_login(body: AdvisorLoginBody, request: Request):
             "userAgent": user_agent,
             "failedAt": datetime.now(timezone.utc).isoformat(),
         })
+        logger.warning(
+            "advisor_login_failed",
+            extra={"reason": "invalid_password", "advisor_id": advisor["id"], "ip": ip},
+        )
         raise HTTPException(401, "Invalid credentials")
 
     session_id = str(uuid.uuid4())
@@ -107,6 +122,15 @@ async def advisor_login(body: AdvisorLoginBody, request: Request):
         "requestedAt": datetime.now(timezone.utc).isoformat(),
     })
 
+    logger.info(
+        "advisor_otp_dispatched",
+        extra={
+            "advisor_id": advisor["id"],
+            "otp_channel": advisor["otpChannel"],
+            "session_id": session_id,
+        },
+    )
+
     return {
         "sessionId": session_id,
         "message": f"OTP sent via {advisor['otpChannel']}",
@@ -124,17 +148,29 @@ async def advisor_verify_otp(body: AdvisorVerifyOTPBody, request: Request, respo
     session_raw = await r.get(session_key)
 
     if not session_raw:
+        logger.warning(
+            "advisor_otp_verify_failed",
+            extra={"reason": "session_not_found", "session_id": body.sessionId, "ip": ip},
+        )
         raise HTTPException(400, "Session not found or expired. Please log in again.")
 
     session = json.loads(session_raw)
 
     if session["step"] != "awaiting_otp":
+        logger.warning(
+            "advisor_otp_verify_failed",
+            extra={"reason": "invalid_session_state", "step": session["step"], "ip": ip},
+        )
         raise HTTPException(400, "Invalid session state")
 
     otp_key = f"otp:{session['advisorId']}"
     stored_otp = await r.get(otp_key)
 
     if not stored_otp or stored_otp != body.otp:
+        logger.warning(
+            "advisor_otp_verify_failed",
+            extra={"reason": "invalid_otp", "advisor_id": session["advisorId"], "ip": ip},
+        )
         raise HTTPException(400, "Invalid or expired OTP")
 
     await r.delete(otp_key, session_key)
@@ -159,6 +195,16 @@ async def advisor_verify_otp(body: AdvisorVerifyOTPBody, request: Request, respo
         "userAgent": user_agent,
         "loggedInAt": datetime.now(timezone.utc).isoformat(),
     })
+
+    logger.info(
+        "advisor_login_success",
+        extra={
+            "advisor_id": session["advisorId"],
+            "role": session["role"],
+            "session_id": new_session_id,
+            "ip": ip,
+        },
+    )
 
     response.set_cookie(
         "access_token",

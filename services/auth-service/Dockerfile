@@ -4,6 +4,7 @@ WORKDIR /app
 COPY services/auth-service/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+COPY shared/logger/logger.py                .
 COPY services/auth-service/config.py        .
 COPY services/auth-service/redis_client.py  .
 COPY services/auth-service/jwt_utils.py     .

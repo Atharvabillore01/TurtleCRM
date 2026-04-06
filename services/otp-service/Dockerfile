@@ -4,6 +4,7 @@ WORKDIR /app
 COPY services/otp-service/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+COPY shared/logger/logger.py               .
 COPY services/otp-service/config.py        .
 COPY services/otp-service/redis_client.py  .
 COPY services/otp-service/eventbus.py      .
