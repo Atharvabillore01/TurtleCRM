@@ -2,9 +2,10 @@ import json
 import uuid
 from datetime import datetime, timezone
 
+import bcrypt as bcrypt_lib
+import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, field_validator
-from passlib.context import CryptContext
 import re
 
 from redis_client import get_redis
@@ -14,8 +15,10 @@ from config import settings
 from logger import get_logger
 
 router = APIRouter(prefix="/auth/advisor", tags=["advisor"])
-pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 logger = get_logger("auth-service")
+
+# Pre-computed at startup so the constant-time dummy check always has a valid hash
+_DUMMY_HASH: bytes = bcrypt_lib.hashpw(b"dummy-constant-time", bcrypt_lib.gensalt())
 
 
 class AdvisorLoginBody(BaseModel):
@@ -49,10 +52,100 @@ class AdvisorVerifyOTPBody(BaseModel):
         return v
 
 
+class AdvisorRegisterBody(BaseModel):
+    username:   str
+    email:      str
+    password:   str
+    otp_channel: str = "email"
+    otp_target:  str | None = None   # phone if SMS; defaults to email
+
+    @field_validator("username")
+    @classmethod
+    def validate_username(cls, v: str) -> str:
+        if not re.match(r"^[a-zA-Z0-9._-]{3,64}$", v):
+            raise ValueError("username must be 3-64 alphanumeric characters (. _ - allowed)")
+        return v
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        if not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", v):
+            raise ValueError("invalid email address")
+        return v.lower()
+
+    @field_validator("password")
+    @classmethod
+    def validate_password(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("password must be at least 8 characters")
+        if len(v) > 128:
+            raise ValueError("password must be at most 128 characters")
+        return v
+
+    @field_validator("otp_channel")
+    @classmethod
+    def validate_otp_channel(cls, v: str) -> str:
+        if v not in ("email", "sms"):
+            raise ValueError("otp_channel must be email or sms")
+        return v
+
+
 async def _find_advisor(username: str) -> dict | None:
     # Stub — replace with user-service HTTP call
     # e.g.: async with httpx.AsyncClient() as c: resp = await c.get(f"{settings.user_service_url}/users/advisor/{username}")
     return None
+
+
+@router.post("/register", status_code=201)
+async def advisor_register(body: AdvisorRegisterBody):
+    otp_target = body.otp_target or body.email
+
+    if body.otp_channel == "sms" and not body.otp_target:
+        raise HTTPException(400, "otp_target (phone number) is required when otp_channel is sms")
+
+    logger.info(
+        "advisor_register_attempt",
+        extra={"username": body.username, "email": body.email, "otp_channel": body.otp_channel},
+    )
+
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.post(
+                f"{settings.user_service_url}/advisors",
+                json={
+                    "username":    body.username,
+                    "email":       body.email,
+                    "password":    body.password,
+                    "otp_channel": body.otp_channel,
+                    "otp_target":  otp_target,
+                },
+                timeout=10.0,
+            )
+        except httpx.RequestError as exc:
+            logger.error("user_service_unreachable", extra={"error": str(exc)})
+            raise HTTPException(502, "User service unavailable")
+
+    if resp.status_code == 201:
+        data = resp.json()
+        logger.info(
+            "advisor_registered",
+            extra={"advisor_id": data.get("id"), "username": data.get("username")},
+        )
+        return {
+            "id":       data["id"],
+            "username": data["username"],
+            "email":    data["email"],
+            "message":  "Account created. You can now log in.",
+        }
+
+    if resp.status_code == 409:
+        raise HTTPException(409, "Username or email already exists")
+
+    logger.error(
+        "advisor_register_failed",
+        extra={"status": resp.status_code, "body": resp.text},
+    )
+    raise HTTPException(500, "Failed to create advisor account")
 
 
 @router.post("/login")
@@ -69,7 +162,7 @@ async def advisor_login(body: AdvisorLoginBody, request: Request):
 
     if not advisor:
         # Constant-time response — don't reveal whether user exists
-        pwd_ctx.verify(body.password, "$2b$12$invalidhashpadding000000000000000000000000000000000000000")
+        bcrypt_lib.checkpw(body.password.encode(), _DUMMY_HASH)
         await publish_event("auth.login.failed", {
             "topic": "auth.login.failed",
             "userId": None,
@@ -86,7 +179,7 @@ async def advisor_login(body: AdvisorLoginBody, request: Request):
         )
         raise HTTPException(401, "Invalid credentials")
 
-    if not pwd_ctx.verify(body.password, advisor["passwordHash"]):
+    if not bcrypt_lib.checkpw(body.password.encode(), advisor["passwordHash"].encode()):
         await publish_event("auth.login.failed", {
             "topic": "auth.login.failed",
             "userId": advisor["id"],
