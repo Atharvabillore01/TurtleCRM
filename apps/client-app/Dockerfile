@@ -35,15 +35,13 @@ WORKDIR /repo/apps/client-app
 RUN npm run build
 
 # ── Production image ──────────────────────────────────────────────────────────
-FROM node:20-alpine AS runner
-WORKDIR /app
-ENV NODE_ENV=production
+FROM nginx:alpine AS runner
 
-# Copy built assets and vite (needed for preview server)
-COPY --from=builder /repo/apps/client-app/dist          ./dist
-COPY --from=builder /repo/node_modules                  ./node_modules
-COPY --from=builder /repo/apps/client-app/package.json  ./package.json
+COPY --from=builder /repo/apps/client-app/dist /usr/share/nginx/html
+
+# SPA fallback: all routes serve index.html
+RUN printf 'server {\n  listen 3000;\n  root /usr/share/nginx/html;\n  index index.html;\n  location / { try_files $uri $uri/ /index.html; }\n}\n' \
+    > /etc/nginx/conf.d/default.conf
 
 EXPOSE 3000
-# vite preview serves the built dist/ as a static SPA
-CMD ["node_modules/.bin/vite", "preview", "--host", "0.0.0.0", "--port", "3000"]
+CMD ["nginx", "-g", "daemon off;"]

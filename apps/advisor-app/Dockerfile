@@ -28,13 +28,14 @@ ENV VITE_AUTH_SERVICE_URL=$VITE_AUTH_SERVICE_URL
 WORKDIR /repo/apps/advisor-app
 RUN npm run build
 
-FROM node:20-alpine AS runner
-WORKDIR /app
-ENV NODE_ENV=production
+# ── Production image ──────────────────────────────────────────────────────────
+FROM nginx:alpine AS runner
 
-COPY --from=builder /repo/apps/advisor-app/dist          ./dist
-COPY --from=builder /repo/node_modules                   ./node_modules
-COPY --from=builder /repo/apps/advisor-app/package.json  ./package.json
+COPY --from=builder /repo/apps/advisor-app/dist /usr/share/nginx/html
+
+# SPA fallback: all routes serve index.html
+RUN printf 'server {\n  listen 3001;\n  root /usr/share/nginx/html;\n  index index.html;\n  location / { try_files $uri $uri/ /index.html; }\n}\n' \
+    > /etc/nginx/conf.d/default.conf
 
 EXPOSE 3001
-CMD ["node_modules/.bin/vite", "preview", "--host", "0.0.0.0", "--port", "3001"]
+CMD ["nginx", "-g", "daemon off;"]
