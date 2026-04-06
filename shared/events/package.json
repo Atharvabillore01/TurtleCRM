@@ -1,0 +1,23 @@
+{
+  "name": "@turtle/events",
+  "version": "1.0.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "lint":  "eslint src"
+  },
+  "dependencies": {
+    "@aws-sdk/client-eventbridge": "^3.0.0",
+    "@aws-sdk/client-sns":         "^3.0.0",
+    "@aws-sdk/client-sqs":         "^3.0.0",
+    "amqplib":                     "^0.10.3",
+    "ioredis":                     "^5.3.2",
+    "kafkajs":                     "^2.2.4"
+  },
+  "devDependencies": {
+    "@types/amqplib": "^0.10.4",
+    "@types/node":    "^20.0.0",
+    "typescript":     "^5.0.0"
+  }
+}
