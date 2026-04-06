@@ -12,8 +12,12 @@ def get_otp_provider() -> OTPProvider:
         if name == "twilio":
             from providers.twilio import TwilioVerifyProvider
             _instance = TwilioVerifyProvider()
+        elif name == "infobip":
+            from providers.infobip import InfobipProvider
+            _instance = InfobipProvider()
         elif name == "mock":
             _instance = MockProvider()
         else:
-            _instance = MockProvider()
+            from providers.twilio import TwilioVerifyProvider
+            _instance = TwilioVerifyProvider()
     return _instance
