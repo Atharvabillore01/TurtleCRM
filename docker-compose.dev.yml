@@ -1,0 +1,27 @@
+version: "3.9"
+
+services:
+  auth-service:
+    environment:
+      NODE_ENV: development
+    volumes:
+      - ./shared/logger/logger.py:/app/logger.py
+      - ./services/auth-service/config.py:/app/config.py
+      - ./services/auth-service/redis_client.py:/app/redis_client.py
+      - ./services/auth-service/jwt_utils.py:/app/jwt_utils.py
+      - ./services/auth-service/eventbus.py:/app/eventbus.py
+      - ./services/auth-service/main.py:/app/main.py
+      - ./services/auth-service/routes:/app/routes
+
+  otp-service:
+    environment:
+      NODE_ENV: development
+    volumes:
+      - ./shared/logger/logger.py:/app/logger.py
+      - ./services/otp-service/config.py:/app/config.py
+      - ./services/otp-service/redis_client.py:/app/redis_client.py
+      - ./services/otp-service/eventbus.py:/app/eventbus.py
+      - ./services/otp-service/consumer.py:/app/consumer.py
+      - ./services/otp-service/main.py:/app/main.py
+      - ./services/otp-service/otp:/app/otp
+      - ./services/otp-service/providers:/app/providers
