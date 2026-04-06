@@ -5,7 +5,6 @@ import aio_pika
 from aio_pika import ExchangeType
 from aio_pika.abc import AbstractRobustConnection
 
-from config import settings
 from logger import get_logger
 
 logger = get_logger("notification-service")
@@ -24,7 +23,6 @@ async def handle_login_success(payload: dict) -> None:
             "ip": payload.get("ip"),
         },
     )
-    # TODO: send welcome/login-alert email via SendGrid
 
 
 async def handle_login_failed(payload: dict) -> None:
@@ -37,7 +35,6 @@ async def handle_login_failed(payload: dict) -> None:
             "ip": payload.get("ip"),
         },
     )
-    # TODO: send security-alert email
 
 
 async def _subscribe(channel, topic: str, queue_prefix: str, handler) -> None:
