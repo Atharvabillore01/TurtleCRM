@@ -1,0 +1,33 @@
+{
+  "name": "@turtle/auth-service",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev":   "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "lint":  "eslint src"
+  },
+  "dependencies": {
+    "@turtle/types":    "*",
+    "@turtle/config":   "*",
+    "@turtle/events":   "*",
+    "@fastify/cookie":  "^9.0.0",
+    "@fastify/cors":    "^9.0.0",
+    "bcrypt":           "^5.1.1",
+    "fastify":          "^4.28.0",
+    "ioredis":          "^5.3.2",
+    "jsonwebtoken":     "^9.0.2",
+    "kafkajs":          "^2.2.4",
+    "pino-pretty":      "^11.0.0",
+    "zod":              "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/bcrypt":       "^5.0.2",
+    "@types/jsonwebtoken": "^9.0.6",
+    "@types/node":         "^20.0.0",
+    "tsx":                 "^4.0.0",
+    "typescript":          "^5.0.0"
+  }
+}

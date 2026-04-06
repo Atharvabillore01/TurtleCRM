@@ -1,0 +1,22 @@
+{
+  "name": "turtle-corporate",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "services/*",
+    "packages/*",
+    "shared/*"
+  ],
+  "scripts": {
+    "dev": "npm run docker:up",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "docker:up": "docker-compose up --build",
+    "docker:down": "docker-compose down",
+    "docker:clean": "docker-compose down -v --remove-orphans"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
