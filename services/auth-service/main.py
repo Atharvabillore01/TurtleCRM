@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 from config import settings
 from redis_client import close_redis
-from eventbus import disconnect
+from eventbus import disconnect, _get_exchange
 from routes.client import router as client_router
 from routes.advisor import router as advisor_router
 from routes.oauth import router as oauth_router
@@ -22,6 +22,8 @@ logger = get_logger("auth-service")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("auth-service starting up", extra={"env": settings.node_env})
+    await _get_exchange()
+    logger.info("rabbitmq publisher connected")
     yield
     logger.info("auth-service shutting down")
     await asyncio.gather(disconnect(), close_redis(), return_exceptions=True)

@@ -15,7 +15,7 @@ from otp.rate_limit import check_rate_limit
 from otp.generate import generate_otp
 from otp.store import store_otp
 from providers.factory import get_otp_provider
-from eventbus import start_consumer, disconnect_publisher, publish_event
+from eventbus import start_consumer, disconnect_publisher, publish_event, _get_pub_exchange
 from consumer import handle_otp_requested
 from logger import get_logger
 
@@ -27,6 +27,7 @@ _consumer_task: asyncio.Task | None = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _consumer_task
+    await _get_pub_exchange()
     _consumer_task = asyncio.create_task(
         start_consumer(
             topic="auth.otp.requested",
