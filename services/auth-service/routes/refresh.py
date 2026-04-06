@@ -1,4 +1,3 @@
-import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Response
@@ -6,15 +5,9 @@ from jose import JWTError
 from pydantic import BaseModel
 
 from redis_client import get_redis
-from jwt_utils import (
-    verify_refresh_token,
-    sign_access_token,
-    sign_refresh_token,
-    refresh_token_key,
-    refresh_token_ttl,
-)
+from jwt_utils import verify_refresh_token, refresh_token_key
 from eventbus import publish_event
-from config import settings
+from auth_utils import issue_tokens, set_auth_cookie
 from logger import get_logger
 
 router = APIRouter(tags=["auth"])
@@ -38,7 +31,6 @@ async def refresh_tokens(body: RefreshBody, response: Response):
         raise HTTPException(401, "Invalid or expired refresh token")
 
     user_id = payload["userId"]
-    session_id = payload["sessionId"]
     token_id = payload["tokenId"]
 
     r = get_redis()
@@ -46,43 +38,24 @@ async def refresh_tokens(body: RefreshBody, response: Response):
     stored = await r.get(key)
 
     if not stored:
-        logger.warning(
-            "token_refresh_failed",
-            extra={"reason": "token_revoked_or_used", "user_id": user_id},
-        )
+        logger.warning("token_refresh_failed", extra={"reason": "token_revoked_or_used", "user_id": user_id})
         raise HTTPException(401, "Refresh token revoked or already used")
 
     await r.delete(key)
 
-    new_session_id = str(uuid.uuid4())
-    new_access_token = sign_access_token(user_id, "client", "client", new_session_id)
-    new_refresh_token, new_token_id = sign_refresh_token(user_id, new_session_id)
-
-    await r.setex(refresh_token_key(user_id, new_token_id), refresh_token_ttl(), new_session_id)
+    access_token, refresh_token, session_id = await issue_tokens(user_id, "client", "client")
 
     await publish_event("auth.token.refreshed", {
         "topic": "auth.token.refreshed",
         "userId": user_id,
-        "sessionId": new_session_id,
+        "sessionId": session_id,
         "refreshedAt": datetime.now(timezone.utc).isoformat(),
     })
 
-    logger.info(
-        "token_refreshed",
-        extra={"user_id": user_id, "new_session_id": new_session_id},
-    )
+    logger.info("token_refreshed", extra={"user_id": user_id, "new_session_id": session_id})
 
-    response.set_cookie(
-        "access_token",
-        new_access_token,
-        httponly=True,
-        samesite="lax",
-        path="/",
-        max_age=15 * 60,
-        secure=settings.node_env == "production",
-    )
-
-    return {"accessToken": new_access_token, "refreshToken": new_refresh_token}
+    set_auth_cookie(response, access_token)
+    return {"accessToken": access_token, "refreshToken": refresh_token}
 
 
 @router.post("/auth/logout")

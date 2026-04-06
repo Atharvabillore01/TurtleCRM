@@ -1,18 +1,17 @@
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 
 import bcrypt as bcrypt_lib
 import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
-import httpx
 from pydantic import BaseModel, field_validator
-import re
 
 from redis_client import get_redis
-from jwt_utils import sign_access_token, sign_refresh_token, refresh_token_key, refresh_token_ttl
 from eventbus import publish_event
 from config import settings
+from auth_utils import verify_otp_with_service, issue_tokens, set_auth_cookie
 from logger import get_logger
 
 router = APIRouter(prefix="/auth/advisor", tags=["advisor"])
@@ -22,69 +21,17 @@ logger = get_logger("auth-service")
 _DUMMY_HASH: bytes = bcrypt_lib.hashpw(b"dummy-constant-time", bcrypt_lib.gensalt())
 
 
-async def _verify_otp_with_service(*, channel: str, destination: str, otp: str, user_id: str, user_type: str) -> dict:
+async def _find_advisor(username: str) -> dict | None:
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{settings.otp_service_url}/otp/verify",
-                json={
-                    "channel": channel,
-                    "destination": destination,
-                    "otp": otp,
-                    "userId": user_id,
-                    "userType": user_type,
-                },
-            )
-    except httpx.HTTPError:
-        return {
-            "valid": False,
-            "error": "OTP service unavailable",
-            "reason": "service_unavailable",
-            "status_code": 503,
-        }
-    data = resp.json()
-    if resp.is_success:
-        return {"valid": True}
-    return {
-        "valid": False,
-        "error": data.get("error", "Invalid or expired OTP"),
-        "attemptsLeft": data.get("attemptsLeft"),
-        "reason": data.get("reason"),
-        "status_code": resp.status_code,
-    }
-
-
-async def _verify_otp_with_service(*, channel: str, destination: str, otp: str, user_id: str, user_type: str) -> dict:
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.post(
-                f"{settings.otp_service_url}/otp/verify",
-                json={
-                    "channel": channel,
-                    "destination": destination,
-                    "otp": otp,
-                    "userId": user_id,
-                    "userType": user_type,
-                },
-            )
-    except httpx.HTTPError:
-        return {
-            "valid": False,
-            "error": "OTP service unavailable",
-            "reason": "service_unavailable",
-            "status_code": 503,
-        }
-
-    data = resp.json()
-    if resp.is_success:
-        return {"valid": True}
-    return {
-        "valid": False,
-        "error": data.get("error", "Invalid or expired OTP"),
-        "attemptsLeft": data.get("attemptsLeft"),
-        "reason": data.get("reason"),
-        "status_code": resp.status_code,
-    }
+            resp = await client.get(f"{settings.user_service_url}/advisors/by-username/{username}")
+    except httpx.RequestError:
+        raise HTTPException(502, "User service unavailable")
+    if resp.status_code == 404:
+        return None
+    if not resp.is_success:
+        raise HTTPException(502, "User service error")
+    return resp.json()
 
 
 class AdvisorLoginBody(BaseModel):
@@ -119,11 +66,11 @@ class AdvisorVerifyOTPBody(BaseModel):
 
 
 class AdvisorRegisterBody(BaseModel):
-    username:   str
-    email:      str
-    password:   str
+    username: str
+    email: str
+    password: str
     otp_channel: str = "email"
-    otp_target:  str | None = None   # phone if SMS; defaults to email
+    otp_target: str | None = None  # phone if SMS; defaults to email
 
     @field_validator("username")
     @classmethod
@@ -142,10 +89,8 @@ class AdvisorRegisterBody(BaseModel):
     @field_validator("password")
     @classmethod
     def validate_password(cls, v: str) -> str:
-        if len(v) < 8:
-            raise ValueError("password must be at least 8 characters")
-        if len(v) > 128:
-            raise ValueError("password must be at most 128 characters")
+        if not 8 <= len(v) <= 128:
+            raise ValueError("password must be 8-128 characters")
         return v
 
     @field_validator("otp_channel")
@@ -156,62 +101,49 @@ class AdvisorRegisterBody(BaseModel):
         return v
 
 
-async def _find_advisor(username: str) -> dict | None:
-    # Stub — replace with user-service HTTP call
-    # e.g.: async with httpx.AsyncClient() as c: resp = await c.get(f"{settings.user_service_url}/users/advisor/{username}")
-    return None
-
-
 @router.post("/register", status_code=201)
 async def advisor_register(body: AdvisorRegisterBody):
-    otp_target = body.otp_target or body.email
-
     if body.otp_channel == "sms" and not body.otp_target:
         raise HTTPException(400, "otp_target (phone number) is required when otp_channel is sms")
+
+    otp_target = body.otp_target or body.email
 
     logger.info(
         "advisor_register_attempt",
         extra={"username": body.username, "email": body.email, "otp_channel": body.otp_channel},
     )
 
-    async with httpx.AsyncClient() as client:
-        try:
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.post(
                 f"{settings.user_service_url}/advisors",
                 json={
-                    "username":    body.username,
-                    "email":       body.email,
-                    "password":    body.password,
+                    "username": body.username,
+                    "email": body.email,
+                    "password": body.password,
                     "otp_channel": body.otp_channel,
-                    "otp_target":  otp_target,
+                    "otp_target": otp_target,
                 },
-                timeout=10.0,
             )
-        except httpx.RequestError as exc:
-            logger.error("user_service_unreachable", extra={"error": str(exc)})
-            raise HTTPException(502, "User service unavailable")
-
-    if resp.status_code == 201:
-        data = resp.json()
-        logger.info(
-            "advisor_registered",
-            extra={"advisor_id": data.get("id"), "username": data.get("username")},
-        )
-        return {
-            "id":       data["id"],
-            "username": data["username"],
-            "email":    data["email"],
-            "message":  "Account created. You can now log in.",
-        }
+    except httpx.RequestError as exc:
+        logger.error("user_service_unreachable", extra={"error": str(exc)})
+        raise HTTPException(502, "User service unavailable")
 
     if resp.status_code == 409:
         raise HTTPException(409, "Username or email already exists")
 
-    logger.error(
-        "advisor_register_failed",
-        extra={"status": resp.status_code, "body": resp.text},
-    )
-    raise HTTPException(500, "Failed to create advisor account")
+    if resp.status_code != 201:
+        logger.error("advisor_register_failed", extra={"status": resp.status_code, "body": resp.text})
+        raise HTTPException(500, "Failed to create advisor account")
+
+    data = resp.json()
+    logger.info("advisor_registered", extra={"advisor_id": data.get("id"), "username": data.get("username")})
+    return {
+        "id": data["id"],
+        "username": data["username"],
+        "email": data["email"],
+        "message": "Account created. You can now log in.",
+    }
 
 
 @router.post("/login")
@@ -219,15 +151,11 @@ async def advisor_login(body: AdvisorLoginBody, request: Request):
     ip = request.client.host if request.client else "unknown"
     user_agent = request.headers.get("user-agent", "")
 
-    logger.info(
-        "advisor_login_attempt",
-        extra={"username": body.username, "ip": ip},
-    )
+    logger.info("advisor_login_attempt", extra={"username": body.username, "ip": ip})
 
     advisor = await _find_advisor(body.username)
 
     if not advisor:
-        # Constant-time response — don't reveal whether user exists
         bcrypt_lib.checkpw(body.password.encode(), _DUMMY_HASH)
         await publish_event("auth.login.failed", {
             "topic": "auth.login.failed",
@@ -239,10 +167,7 @@ async def advisor_login(body: AdvisorLoginBody, request: Request):
             "userAgent": user_agent,
             "failedAt": datetime.now(timezone.utc).isoformat(),
         })
-        logger.warning(
-            "advisor_login_failed",
-            extra={"reason": "user_not_found", "username": body.username, "ip": ip},
-        )
+        logger.warning("advisor_login_failed", extra={"reason": "user_not_found", "username": body.username, "ip": ip})
         raise HTTPException(401, "Invalid credentials")
 
     if not bcrypt_lib.checkpw(body.password.encode(), advisor["passwordHash"].encode()):
@@ -256,18 +181,13 @@ async def advisor_login(body: AdvisorLoginBody, request: Request):
             "userAgent": user_agent,
             "failedAt": datetime.now(timezone.utc).isoformat(),
         })
-        logger.warning(
-            "advisor_login_failed",
-            extra={"reason": "invalid_password", "advisor_id": advisor["id"], "ip": ip},
-        )
+        logger.warning("advisor_login_failed", extra={"reason": "invalid_password", "advisor_id": advisor["id"], "ip": ip})
         raise HTTPException(401, "Invalid credentials")
 
     session_id = str(uuid.uuid4())
     r = get_redis()
-
-    session_key = f"advisor:session:{session_id}"
     await r.setex(
-        session_key,
+        f"advisor:session:{session_id}",
         settings.otp_expires_in_seconds,
         json.dumps({
             "advisorId": advisor["id"],
@@ -289,11 +209,7 @@ async def advisor_login(body: AdvisorLoginBody, request: Request):
 
     logger.info(
         "advisor_otp_dispatched",
-        extra={
-            "advisor_id": advisor["id"],
-            "otp_channel": advisor["otpChannel"],
-            "session_id": session_id,
-        },
+        extra={"advisor_id": advisor["id"], "otp_channel": advisor["otpChannel"], "session_id": session_id},
     )
 
     return {
@@ -305,30 +221,22 @@ async def advisor_login(body: AdvisorLoginBody, request: Request):
 
 @router.post("/verify-otp")
 async def advisor_verify_otp(body: AdvisorVerifyOTPBody, request: Request, response: Response):
-    r = get_redis()
     ip = request.client.host if request.client else "unknown"
     user_agent = request.headers.get("user-agent", "")
+    r = get_redis()
 
-    session_key = f"advisor:session:{body.sessionId}"
-    session_raw = await r.get(session_key)
-
+    session_raw = await r.get(f"advisor:session:{body.sessionId}")
     if not session_raw:
-        logger.warning(
-            "advisor_otp_verify_failed",
-            extra={"reason": "session_not_found", "session_id": body.sessionId, "ip": ip},
-        )
+        logger.warning("advisor_otp_verify_failed", extra={"reason": "session_not_found", "session_id": body.sessionId, "ip": ip})
         raise HTTPException(400, "Session not found or expired. Please log in again.")
 
     session = json.loads(session_raw)
 
     if session["step"] != "awaiting_otp":
-        logger.warning(
-            "advisor_otp_verify_failed",
-            extra={"reason": "invalid_session_state", "step": session["step"], "ip": ip},
-        )
+        logger.warning("advisor_otp_verify_failed", extra={"reason": "invalid_session_state", "step": session["step"], "ip": ip})
         raise HTTPException(400, "Invalid session state")
 
-    verification = await _verify_otp_with_service(
+    verification = await verify_otp_with_service(
         channel=session["otpChannel"],
         destination=session["otpTarget"],
         otp=body.otp,
@@ -339,24 +247,14 @@ async def advisor_verify_otp(body: AdvisorVerifyOTPBody, request: Request, respo
     if not verification["valid"]:
         logger.warning(
             "advisor_otp_verify_failed",
-            extra={
-                "reason": verification.get("reason", "invalid_otp"),
-                "advisor_id": session["advisorId"],
-                "ip": ip,
-            },
+            extra={"reason": verification.get("reason", "invalid_otp"), "advisor_id": session["advisorId"], "ip": ip},
         )
         raise HTTPException(verification.get("status_code", 400), verification["error"])
 
-    await r.delete(session_key)
+    await r.delete(f"advisor:session:{body.sessionId}")
 
-    new_session_id = str(uuid.uuid4())
-    access_token = sign_access_token(session["advisorId"], "advisor", session["role"], new_session_id)
-    refresh_token, token_id = sign_refresh_token(session["advisorId"], new_session_id)
-
-    await r.setex(
-        refresh_token_key(session["advisorId"], token_id),
-        refresh_token_ttl(),
-        new_session_id,
+    access_token, refresh_token, session_id = await issue_tokens(
+        session["advisorId"], "advisor", session["role"]
     )
 
     await publish_event("auth.login.success", {
@@ -364,7 +262,7 @@ async def advisor_verify_otp(body: AdvisorVerifyOTPBody, request: Request, respo
         "userId": session["advisorId"],
         "userType": "advisor",
         "authMethod": "otp",
-        "sessionId": new_session_id,
+        "sessionId": session_id,
         "ip": ip,
         "userAgent": user_agent,
         "loggedInAt": datetime.now(timezone.utc).isoformat(),
@@ -372,22 +270,8 @@ async def advisor_verify_otp(body: AdvisorVerifyOTPBody, request: Request, respo
 
     logger.info(
         "advisor_login_success",
-        extra={
-            "advisor_id": session["advisorId"],
-            "role": session["role"],
-            "session_id": new_session_id,
-            "ip": ip,
-        },
+        extra={"advisor_id": session["advisorId"], "role": session["role"], "session_id": session_id, "ip": ip},
     )
 
-    response.set_cookie(
-        "access_token",
-        access_token,
-        httponly=True,
-        samesite="lax",
-        path="/",
-        max_age=15 * 60,
-        secure=settings.node_env == "production",
-    )
-
-    return {"accessToken": access_token, "refreshToken": refresh_token, "sessionId": new_session_id}
+    set_auth_cookie(response, access_token)
+    return {"accessToken": access_token, "refreshToken": refresh_token, "sessionId": session_id}

@@ -1,4 +1,3 @@
-import uuid
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
@@ -6,10 +5,9 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 
-from redis_client import get_redis
-from jwt_utils import sign_access_token, sign_refresh_token, refresh_token_key, refresh_token_ttl
 from eventbus import publish_event
 from config import settings
+from auth_utils import issue_tokens, set_auth_cookie
 from logger import get_logger
 
 router = APIRouter(prefix="/auth/oauth", tags=["oauth"])
@@ -40,10 +38,7 @@ async def google_callback(request: Request, response: Response, code: str | None
     user_agent = request.headers.get("user-agent", "")
 
     if error or not code:
-        logger.warning(
-            "oauth_callback_denied",
-            extra={"provider": "google", "error": error, "ip": ip},
-        )
+        logger.warning("oauth_callback_denied", extra={"provider": "google", "error": error, "ip": ip})
         return RedirectResponse(f"{settings.advisor_app_url}/auth/error?reason=oauth_denied")
 
     async with httpx.AsyncClient() as client:
@@ -56,10 +51,7 @@ async def google_callback(request: Request, response: Response, code: str | None
         })
 
         if token_resp.status_code != 200:
-            logger.error(
-                "oauth_token_exchange_failed",
-                extra={"provider": "google", "status": token_resp.status_code, "ip": ip},
-            )
+            logger.error("oauth_token_exchange_failed", extra={"provider": "google", "status": token_resp.status_code, "ip": ip})
             raise HTTPException(502, "Failed to exchange OAuth code")
 
         token_data = token_resp.json()
@@ -70,22 +62,13 @@ async def google_callback(request: Request, response: Response, code: str | None
         )
 
         if profile_resp.status_code != 200:
-            logger.error(
-                "oauth_profile_fetch_failed",
-                extra={"provider": "google", "status": profile_resp.status_code, "ip": ip},
-            )
+            logger.error("oauth_profile_fetch_failed", extra={"provider": "google", "status": profile_resp.status_code, "ip": ip})
             raise HTTPException(502, "Failed to fetch Google profile")
 
         profile = profile_resp.json()
 
     user_id = f"google:{profile['sub']}"
-    session_id = str(uuid.uuid4())
-    r = get_redis()
-
-    access_token = sign_access_token(user_id, "advisor", "advisor", session_id)
-    refresh_token, token_id = sign_refresh_token(user_id, session_id)
-
-    await r.setex(refresh_token_key(user_id, token_id), refresh_token_ttl(), session_id)
+    access_token, refresh_token, session_id = await issue_tokens(user_id, "advisor", "advisor")
 
     await publish_event("auth.login.success", {
         "topic": "auth.login.success",
@@ -98,25 +81,7 @@ async def google_callback(request: Request, response: Response, code: str | None
         "loggedInAt": datetime.now(timezone.utc).isoformat(),
     })
 
-    logger.info(
-        "oauth_login_success",
-        extra={
-            "provider": "google",
-            "user_id": user_id,
-            "session_id": session_id,
-            "ip": ip,
-        },
-    )
+    logger.info("oauth_login_success", extra={"provider": "google", "user_id": user_id, "session_id": session_id, "ip": ip})
 
-    response.set_cookie(
-        "access_token",
-        access_token,
-        httponly=True,
-        samesite="lax",
-        path="/",
-        max_age=15 * 60,
-        secure=settings.node_env == "production",
-    )
-
-    redirect_url = f"{settings.advisor_app_url}/auth/callback?refresh_token={refresh_token}"
-    return RedirectResponse(redirect_url)
+    set_auth_cookie(response, access_token)
+    return RedirectResponse(f"{settings.advisor_app_url}/auth/callback?refresh_token={refresh_token}")
