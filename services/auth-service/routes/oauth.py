@@ -10,8 +10,10 @@ from redis_client import get_redis
 from jwt_utils import sign_access_token, sign_refresh_token, refresh_token_key, refresh_token_ttl
 from eventbus import publish_event
 from config import settings
+from logger import get_logger
 
 router = APIRouter(prefix="/auth/oauth", tags=["oauth"])
+logger = get_logger("auth-service")
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -28,6 +30,7 @@ async def google_redirect():
         "access_type": "offline",
         "prompt": "consent",
     })
+    logger.info("oauth_redirect", extra={"provider": "google"})
     return RedirectResponse(f"{GOOGLE_AUTH_URL}?{params}")
 
 
@@ -37,6 +40,10 @@ async def google_callback(request: Request, response: Response, code: str | None
     user_agent = request.headers.get("user-agent", "")
 
     if error or not code:
+        logger.warning(
+            "oauth_callback_denied",
+            extra={"provider": "google", "error": error, "ip": ip},
+        )
         return RedirectResponse(f"{settings.advisor_app_url}/auth/error?reason=oauth_denied")
 
     async with httpx.AsyncClient() as client:
@@ -49,6 +56,10 @@ async def google_callback(request: Request, response: Response, code: str | None
         })
 
         if token_resp.status_code != 200:
+            logger.error(
+                "oauth_token_exchange_failed",
+                extra={"provider": "google", "status": token_resp.status_code, "ip": ip},
+            )
             raise HTTPException(502, "Failed to exchange OAuth code")
 
         token_data = token_resp.json()
@@ -59,6 +70,10 @@ async def google_callback(request: Request, response: Response, code: str | None
         )
 
         if profile_resp.status_code != 200:
+            logger.error(
+                "oauth_profile_fetch_failed",
+                extra={"provider": "google", "status": profile_resp.status_code, "ip": ip},
+            )
             raise HTTPException(502, "Failed to fetch Google profile")
 
         profile = profile_resp.json()
@@ -82,6 +97,16 @@ async def google_callback(request: Request, response: Response, code: str | None
         "userAgent": user_agent,
         "loggedInAt": datetime.now(timezone.utc).isoformat(),
     })
+
+    logger.info(
+        "oauth_login_success",
+        extra={
+            "provider": "google",
+            "user_id": user_id,
+            "session_id": session_id,
+            "ip": ip,
+        },
+    )
 
     response.set_cookie(
         "access_token",

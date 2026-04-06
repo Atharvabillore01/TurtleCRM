@@ -1,13 +1,12 @@
-import logging
-
 from redis_client import get_redis
 from otp.generate import generate_otp
 from otp.store import store_otp
 from otp.rate_limit import check_rate_limit
 from providers.factory import get_otp_provider
 from eventbus import publish_event
+from logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger("otp-service")
 
 
 async def handle_otp_requested(payload: dict) -> None:
@@ -16,11 +15,19 @@ async def handle_otp_requested(payload: dict) -> None:
     user_id = payload.get("userId", "")
     user_type = payload.get("userType", "client")
 
+    logger.debug(
+        "otp_event_received",
+        extra={"channel": channel, "user_id": user_id, "user_type": user_type},
+    )
+
     r = get_redis()
 
     rate = await check_rate_limit(r, target)
     if not rate.allowed:
-        logger.warning(f"[otp-consumer] rate limit hit for {target}, retry in {rate.retry_after}s")
+        logger.warning(
+            "otp_rate_limited",
+            extra={"user_id": user_id, "retry_after": rate.retry_after},
+        )
         return
 
     otp, hash_ = generate_otp()
@@ -32,6 +39,13 @@ async def handle_otp_requested(payload: dict) -> None:
             await provider.send_sms(target, otp)
         else:
             await provider.send_email(target, otp)
-        logger.info(f"[otp-consumer] OTP dispatched via {channel} to {target}")
+        logger.info(
+            "otp_dispatched",
+            extra={"channel": channel, "user_id": user_id, "user_type": user_type},
+        )
     except Exception as e:
-        logger.error(f"[otp-consumer] provider error ({channel} → {target}): {e}")
+        logger.error(
+            "otp_dispatch_failed",
+            extra={"channel": channel, "user_id": user_id, "error": str(e)},
+            exc_info=True,
+        )

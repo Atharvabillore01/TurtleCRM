@@ -1,26 +1,42 @@
 import asyncio
 import json
-import logging
 
 import aio_pika
 from aio_pika import ExchangeType
 from aio_pika.abc import AbstractRobustConnection
 
 from config import settings
+from logger import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger("notification-service")
 EXCHANGE_NAME = "turtle.events"
 
 _conn: AbstractRobustConnection | None = None
 
 
 async def handle_login_success(payload: dict) -> None:
-    logger.info(f"[notification] login success for user {payload.get('userId')} via {payload.get('authMethod')}")
+    logger.info(
+        "login_success_notification",
+        extra={
+            "user_id": payload.get("userId"),
+            "auth_method": payload.get("authMethod"),
+            "user_type": payload.get("userType"),
+            "ip": payload.get("ip"),
+        },
+    )
     # TODO: send welcome/login-alert email via SendGrid
 
 
 async def handle_login_failed(payload: dict) -> None:
-    logger.warning(f"[notification] login failed for user {payload.get('userId')} reason={payload.get('reason')}")
+    logger.warning(
+        "login_failed_notification",
+        extra={
+            "user_id": payload.get("userId"),
+            "reason": payload.get("reason"),
+            "user_type": payload.get("userType"),
+            "ip": payload.get("ip"),
+        },
+    )
     # TODO: send security-alert email
 
 
@@ -40,10 +56,14 @@ async def _subscribe(channel, topic: str, queue_prefix: str, handler) -> None:
                 data = json.loads(msg.body.decode())
                 await handler(data)
             except Exception as e:
-                logger.error(f"[notification] error handling {topic}: {e}", exc_info=True)
+                logger.error(
+                    "message_handler_error",
+                    extra={"topic": topic, "error": str(e)},
+                    exc_info=True,
+                )
 
     await queue.consume(on_message)
-    logger.info(f"[notification] subscribed to '{topic}'")
+    logger.info("consumer_subscribed", extra={"topic": topic, "queue": queue_name})
 
 
 async def start_consumers() -> None:
@@ -55,8 +75,9 @@ async def start_consumers() -> None:
     await _subscribe(channel, "auth.login.success", "notification-service-group", handle_login_success)
     await _subscribe(channel, "auth.login.failed", "notification-service-group", handle_login_failed)
 
-    logger.info("[notification] consumers ready")
+    logger.info("all_consumers_ready")
     try:
         await asyncio.Future()  # block until cancelled
     finally:
         await _conn.close()
+        logger.info("rabbitmq_connection_closed")

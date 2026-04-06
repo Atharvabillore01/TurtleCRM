@@ -1,11 +1,10 @@
 from dataclasses import dataclass
 
+import bcrypt
 import redis.asyncio as aioredis
-from passlib.context import CryptContext
 
 from otp.store import get_stored_otp, update_stored_otp, delete_stored_otp
 
-pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
 MAX_ATTEMPTS = 3
 
 
@@ -34,7 +33,7 @@ async def validate_otp(r: aioredis.Redis, channel: str, destination: str, otp: s
     if not record:
         return ValidateResult(valid=False, attempts_left=0, reason="not_found")
 
-    match = pwd_ctx.verify(otp, record["hash"])
+    match = bcrypt.checkpw(otp.encode(), record["hash"].encode())
 
     if match:
         await delete_stored_otp(r, channel, destination)

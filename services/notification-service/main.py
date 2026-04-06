@@ -1,14 +1,14 @@
 import asyncio
-import logging
+import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 
 from config import settings
 from consumer import start_consumers
+from logger import get_logger
 
-logging.basicConfig(level=logging.DEBUG if settings.node_env != "production" else logging.INFO)
-logger = logging.getLogger(__name__)
+logger = get_logger("notification-service")
 
 _consumer_task: asyncio.Task | None = None
 
@@ -17,7 +17,7 @@ _consumer_task: asyncio.Task | None = None
 async def lifespan(app: FastAPI):
     global _consumer_task
     _consumer_task = asyncio.create_task(start_consumers())
-    logger.info("[notification-service] started")
+    logger.info("notification-service started", extra={"env": settings.node_env})
     yield
     if _consumer_task:
         _consumer_task.cancel()
@@ -25,10 +25,28 @@ async def lifespan(app: FastAPI):
             await _consumer_task
         except asyncio.CancelledError:
             pass
-    logger.info("[notification-service] shut down")
+    logger.info("notification-service shut down")
 
 
 app = FastAPI(title="notification-service", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = round((time.perf_counter() - start) * 1000, 2)
+    logger.info(
+        "http_request",
+        extra={
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": response.status_code,
+            "duration_ms": duration_ms,
+            "client_ip": request.client.host if request.client else "unknown",
+        },
+    )
+    return response
 
 
 @app.get("/health")
