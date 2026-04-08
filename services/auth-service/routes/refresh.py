@@ -1,37 +1,34 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from jose import JWTError
-from pydantic import BaseModel
 
 from redis_client import get_redis
 from jwt_utils import verify_refresh_token, refresh_token_key
 from eventbus import publish_event
-from auth_utils import issue_tokens, set_auth_cookie
+from auth_utils import issue_tokens, set_token_cookies
 from logger import get_logger
 
 router = APIRouter(tags=["auth"])
 logger = get_logger("auth-service")
 
 
-class RefreshBody(BaseModel):
-    refreshToken: str
-
-
-class LogoutBody(BaseModel):
-    refreshToken: str | None = None
-
-
 @router.post("/auth/refresh")
-async def refresh_tokens(body: RefreshBody, response: Response):
+async def refresh_tokens(request: Request, response: Response):
+    token = request.cookies.get("refresh_token")
+    if not token:
+        raise HTTPException(401, "No refresh token")
+
     try:
-        payload = verify_refresh_token(body.refreshToken)
+        payload = verify_refresh_token(token)
     except JWTError:
         logger.warning("token_refresh_failed", extra={"reason": "invalid_or_expired_token"})
         raise HTTPException(401, "Invalid or expired refresh token")
 
     user_id = payload["userId"]
     token_id = payload["tokenId"]
+    user_type = payload.get("userType", "client")
+    role = payload.get("role", user_type)
 
     r = get_redis()
     key = refresh_token_key(user_id, token_id)
@@ -43,7 +40,7 @@ async def refresh_tokens(body: RefreshBody, response: Response):
 
     await r.delete(key)
 
-    access_token, refresh_token, session_id = await issue_tokens(user_id, "client", "client")
+    access_token, refresh_token, session_id = await issue_tokens(user_id, user_type, role)
 
     await publish_event("auth.token.refreshed", {
         "topic": "auth.token.refreshed",
@@ -54,15 +51,16 @@ async def refresh_tokens(body: RefreshBody, response: Response):
 
     logger.info("token_refreshed", extra={"user_id": user_id, "new_session_id": session_id})
 
-    set_auth_cookie(response, access_token)
-    return {"accessToken": access_token, "refreshToken": refresh_token}
+    set_token_cookies(response, access_token, refresh_token)
+    return {"accessToken": access_token}
 
 
 @router.post("/auth/logout")
-async def logout(body: LogoutBody, response: Response):
-    if body.refreshToken:
+async def logout(request: Request, response: Response):
+    token = request.cookies.get("refresh_token")
+    if token:
         try:
-            payload = verify_refresh_token(body.refreshToken)
+            payload = verify_refresh_token(token)
             key = refresh_token_key(payload["userId"], payload["tokenId"])
             await get_redis().delete(key)
             logger.info("logout", extra={"user_id": payload["userId"]})
@@ -70,4 +68,5 @@ async def logout(body: LogoutBody, response: Response):
             logger.warning("logout_with_invalid_token")
 
     response.delete_cookie("access_token", path="/")
+    response.delete_cookie("refresh_token", path="/auth")
     return {"message": "Logged out"}

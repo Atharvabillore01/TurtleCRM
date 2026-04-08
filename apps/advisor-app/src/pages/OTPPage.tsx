@@ -6,30 +6,34 @@ import { useAuth } from "../hooks/useAuth.js";
 import { parseApiError } from "../hooks/useAdvisorLogin.js";
 
 interface LocationState {
-  sessionId: string;
-  expiresIn: number;
+  requestId:   string;
+  destination: string;
+  expiresIn:   number;
 }
 
 export function OTPPage() {
   const navigate          = useNavigate();
   const location          = useLocation();
-  const { login, sessionId: ctxSessionId } = useAuth();
+  const { login }         = useAuth();
   const verifyMut         = useOTPVerify();
   const [error, setError] = useState("");
 
   const state = location.state as LocationState | null;
-  const sessionId = state?.sessionId ?? ctxSessionId;
 
   useEffect(() => {
-    if (!sessionId) navigate("/", { replace: true });
-  }, [sessionId, navigate]);
+    if (!state?.requestId) navigate("/", { replace: true });
+  }, [state, navigate]);
 
-  if (!sessionId) return null;
+  if (!state?.requestId) return null;
 
   async function handleComplete(otp: string) {
     setError("");
     try {
-      const res = await verifyMut.mutateAsync({ sessionId: sessionId!, otp });
+      const res = await verifyMut.mutateAsync({
+        requestId:   state!.requestId,
+        destination: state!.destination,
+        otp,
+      });
       login(res.accessToken);
       navigate("/dashboard", { replace: true });
     } catch (err) {
@@ -46,7 +50,6 @@ export function OTPPage() {
             <TurtleLogo size={44} />
           </div>
 
-          {/* Lock icon */}
           <div className="flex justify-center mb-4">
             <div className="w-12 h-12 rounded-full bg-brand-50 flex items-center justify-center">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#2D6A4F" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -57,16 +60,16 @@ export function OTPPage() {
           </div>
 
           <h1 className="text-xl font-bold text-gray-900 text-center mb-1">
-            Two-Factor Authentication
+            Enter your OTP
           </h1>
           <p className="text-sm text-gray-500 text-center mb-6">
-            A code was sent to your registered device
+            A 6-digit code was sent to {state.destination}
           </p>
 
           <div
             className="flex justify-center mb-6"
             role="group"
-            aria-label="Enter two-factor authentication code"
+            aria-label="Enter one-time password"
           >
             <OTPInput
               length={6}
@@ -88,26 +91,10 @@ export function OTPPage() {
             </div>
           )}
 
-          {/* Compliance notice — no resend option */}
-          <div className="mt-4 p-3 bg-amber-50 border border-amber-100 rounded-lg">
-            <p className="text-xs text-amber-700 text-center leading-relaxed">
-              <span className="font-semibold">Cannot receive the code?</span>
-              <br />
-              Contact{" "}
-              <a
-                href="mailto:it-support@turtlecorporate.com"
-                className="underline font-medium"
-              >
-                IT support
-              </a>{" "}
-              for assistance.
-            </p>
-          </div>
-
           <button
             type="button"
             onClick={() => navigate("/")}
-            className="mt-5 w-full text-center text-sm text-gray-400 hover:text-gray-600 transition-colors"
+            className="mt-2 w-full text-center text-sm text-gray-400 hover:text-gray-600 transition-colors"
           >
             ← Back to sign in
           </button>

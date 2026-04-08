@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 
@@ -19,12 +20,22 @@ _exchange: AbstractExchange | None = None
 async def _get_exchange() -> AbstractExchange:
     global _connection, _channel, _exchange
     if _exchange is None:
-        _connection = await aio_pika.connect_robust(settings.rabbitmq_url)
-        _channel = await _connection.channel()
-        _exchange = await _channel.declare_exchange(
-            EXCHANGE_NAME, ExchangeType.TOPIC, durable=True
-        )
-        logger.info("[rabbitmq] publisher ready")
+        last_err: Exception | None = None
+        for attempt in range(1, 11):
+            try:
+                _connection = await aio_pika.connect_robust(settings.rabbitmq_url)
+                _channel = await _connection.channel()
+                _exchange = await _channel.declare_exchange(
+                    EXCHANGE_NAME, ExchangeType.TOPIC, durable=True
+                )
+                logger.info("[rabbitmq] publisher ready")
+                return _exchange
+            except Exception as e:
+                last_err = e
+                wait = min(2 ** attempt, 30)
+                logger.warning(f"[rabbitmq] connect attempt {attempt}/10 failed: {e} — retrying in {wait}s")
+                await asyncio.sleep(wait)
+        raise RuntimeError(f"[rabbitmq] could not connect after 10 attempts: {last_err}")
     return _exchange
 
 

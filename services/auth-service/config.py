@@ -25,10 +25,12 @@ class Settings(BaseSettings):
 
     client_app_url: str = "http://localhost:3000"
     advisor_app_url: str = "http://localhost:3001"
+    internal_app_url: str = "http://localhost:3002"
 
     google_client_id: str = ""
     google_client_secret: str = ""
     google_callback_url: str = "http://localhost:4000/auth/oauth/google/callback"
+    google_internal_callback_url: str = "http://localhost:4000/auth/oauth/internal/google/callback"
 
 
 settings = Settings()

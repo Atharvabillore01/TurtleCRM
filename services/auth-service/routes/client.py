@@ -9,7 +9,7 @@ from pydantic import BaseModel, field_validator
 from redis_client import get_redis
 from eventbus import publish_event
 from config import settings
-from auth_utils import verify_otp_with_service, issue_tokens, set_auth_cookie, mask
+from auth_utils import verify_otp_with_service, issue_tokens, set_token_cookies, mask
 from logger import get_logger
 
 router = APIRouter(prefix="/auth/client", tags=["client"])
@@ -134,5 +134,5 @@ async def verify_otp(body: VerifyOTPBody, response: Response):
 
     logger.info("otp_verified", extra={"user_id": mask(body.destination), "session_id": session_id, "user_type": "client"})
 
-    set_auth_cookie(response, access_token)
-    return {"accessToken": access_token, "refreshToken": refresh_token, "sessionId": session_id}
+    set_token_cookies(response, access_token, refresh_token)
+    return {"accessToken": access_token, "sessionId": session_id}
