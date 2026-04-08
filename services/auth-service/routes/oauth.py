@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
 from eventbus import publish_event
@@ -33,7 +33,7 @@ async def google_redirect():
 
 
 @router.get("/google/callback")
-async def google_callback(request: Request, response: Response, code: str | None = None, error: str | None = None):
+async def google_callback(request: Request, code: str | None = None, error: str | None = None):
     ip = request.client.host if request.client else "unknown"
     user_agent = request.headers.get("user-agent", "")
 
@@ -83,8 +83,9 @@ async def google_callback(request: Request, response: Response, code: str | None
 
     logger.info("oauth_login_success", extra={"provider": "google", "user_id": user_id, "session_id": session_id, "ip": ip})
 
-    set_token_cookies(response, access_token, refresh_token)
-    return RedirectResponse(f"{settings.advisor_app_url}/auth/callback")
+    redirect = RedirectResponse(f"{settings.advisor_app_url}/auth/callback")
+    set_token_cookies(redirect, access_token, refresh_token)
+    return redirect
 
 
 # ── Internal Team OAuth ────────────────────────────────────────────────────────
@@ -104,7 +105,7 @@ async def internal_google_redirect():
 
 
 @router.get("/internal/google/callback")
-async def internal_google_callback(request: Request, response: Response, code: str | None = None, error: str | None = None):
+async def internal_google_callback(request: Request, code: str | None = None, error: str | None = None):
     ip = request.client.host if request.client else "unknown"
     user_agent = request.headers.get("user-agent", "")
 
@@ -154,5 +155,6 @@ async def internal_google_callback(request: Request, response: Response, code: s
 
     logger.info("oauth_login_success", extra={"provider": "google", "app": "internal", "user_id": user_id, "session_id": session_id, "ip": ip})
 
-    set_token_cookies(response, access_token, refresh_token)
-    return RedirectResponse(f"{settings.internal_app_url}/auth/callback")
+    redirect = RedirectResponse(f"{settings.internal_app_url}/auth/callback")
+    set_token_cookies(redirect, access_token, refresh_token)
+    return redirect
