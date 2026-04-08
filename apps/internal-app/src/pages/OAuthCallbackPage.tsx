@@ -1,38 +1,43 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { LoadingSpinner, ErrorMessage } from "@turtle/ui";
-import { exchangeRefreshToken } from "../api/auth.api.js";
 import { useAuth } from "../hooks/useAuth.js";
-import { useState } from "react";
+
+const BASE_URL = import.meta.env["VITE_AUTH_SERVICE_URL"] ?? "http://localhost:4000";
 
 export function OAuthCallbackPage() {
-  const navigate        = useNavigate();
-  const [params]        = useSearchParams();
-  const { login }       = useAuth();
+  const navigate          = useNavigate();
+  const [params]          = useSearchParams();
+  const { login }         = useAuth();
   const [error, setError] = useState("");
-  const ranRef          = useRef(false);
+  const ranRef            = useRef(false);
 
   useEffect(() => {
-    // Strict-mode safe: only run once
     if (ranRef.current) return;
     ranRef.current = true;
 
-    const refreshToken = params.get("refresh_token");
-    const oauthError   = params.get("reason");
-
-    if (oauthError || !refreshToken) {
+    const oauthError = params.get("reason");
+    if (oauthError) {
       setError(
         oauthError === "oauth_denied"
           ? "Google sign-in was cancelled. Please try again."
-          : "OAuth callback failed. Please try signing in again."
+          : "OAuth sign-in failed. Please try again."
       );
       return;
     }
 
+    // Refresh token was set as httpOnly cookie by the server redirect.
     (async () => {
       try {
-        const res = await exchangeRefreshToken(refreshToken);
-        login(res.accessToken);
+        const res = await fetch(`${BASE_URL}/auth/refresh`, {
+          method:      "POST",
+          credentials: "include",
+          headers:     { "Content-Type": "application/json" },
+          body:        JSON.stringify({}),
+        });
+        if (!res.ok) throw new Error();
+        const data = (await res.json()) as { accessToken: string };
+        login(data.accessToken);
         navigate("/dashboard", { replace: true });
       } catch {
         setError("Failed to complete Google sign-in. Please try again.");
