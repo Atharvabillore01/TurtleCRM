@@ -185,6 +185,27 @@ services:
       retries: 3
       start_period: 30s
 
+  internal-app:
+    build:
+      context: .
+      dockerfile: apps/internal-app/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      VITE_AUTH_SERVICE_URL: http://localhost:4000
+    depends_on:
+      auth-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:3002 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
 volumes:
   redis_data:
   rabbitmq_data:

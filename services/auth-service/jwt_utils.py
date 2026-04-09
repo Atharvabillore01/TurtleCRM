@@ -36,13 +36,15 @@ def verify_access_token(token: str) -> dict:
     return jwt.decode(token, settings.jwt_secret, algorithms=["HS256"])
 
 
-def sign_refresh_token(user_id: str, session_id: str) -> tuple[str, str]:
+def sign_refresh_token(user_id: str, session_id: str, user_type: str = "client", role: str = "client") -> tuple[str, str]:
     token_id = str(uuid.uuid4())
     now = datetime.now(timezone.utc)
     payload = {
         "userId": user_id,
         "sessionId": session_id,
         "tokenId": token_id,
+        "userType": user_type,
+        "role": role,
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(seconds=REFRESH_TTL)).timestamp()),
     }

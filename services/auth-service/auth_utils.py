@@ -5,7 +5,7 @@ from fastapi import Response
 
 from config import settings
 from redis_client import get_redis
-from jwt_utils import sign_access_token, sign_refresh_token, refresh_token_key, refresh_token_ttl
+from jwt_utils import sign_access_token, sign_refresh_token, refresh_token_key, refresh_token_ttl, REFRESH_TTL
 
 
 def mask(dest: str) -> str:
@@ -58,18 +58,21 @@ async def issue_tokens(user_id: str, user_type: str, role: str) -> tuple[str, st
     session_id = str(uuid.uuid4())
     r = get_redis()
     access_token = sign_access_token(user_id, user_type, role, session_id)
-    refresh_token, token_id = sign_refresh_token(user_id, session_id)
+    refresh_token, token_id = sign_refresh_token(user_id, session_id, user_type, role)
     await r.setex(refresh_token_key(user_id, token_id), refresh_token_ttl(), session_id)
     return access_token, refresh_token, session_id
 
 
-def set_auth_cookie(response: Response, access_token: str) -> None:
+def set_token_cookies(response: Response, access_token: str, refresh_token: str) -> None:
+    secure = settings.node_env == "production"
     response.set_cookie(
-        "access_token",
-        access_token,
-        httponly=True,
-        samesite="lax",
-        path="/",
-        max_age=15 * 60,
-        secure=settings.node_env == "production",
+        "access_token", access_token,
+        httponly=True, samesite="lax", path="/",
+        max_age=15 * 60, secure=secure,
+    )
+    # path="/auth" — refresh token is only sent to /auth/* endpoints
+    response.set_cookie(
+        "refresh_token", refresh_token,
+        httponly=True, samesite="lax", path="/auth",
+        max_age=REFRESH_TTL, secure=secure,
     )

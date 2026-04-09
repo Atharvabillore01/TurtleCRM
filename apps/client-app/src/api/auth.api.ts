@@ -8,9 +8,8 @@ export interface RequestOTPResponse {
 }
 
 export interface VerifyOTPResponse {
-  accessToken:  string;
-  refreshToken: string;
-  sessionId:    string;
+  accessToken: string;
+  sessionId:   string;
 }
 
 export async function requestOTP(

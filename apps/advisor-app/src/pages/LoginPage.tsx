@@ -1,58 +1,64 @@
 import { useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { TurtleLogo, ErrorMessage, LoadingSpinner } from "@turtle/ui";
-import { GoogleOAuthButton } from "../components/GoogleOAuthButton.js";
-import { PasswordInput }     from "../components/PasswordInput.js";
-import { useAdvisorLogin, parseApiError } from "../hooks/useAdvisorLogin.js";
-import { useAuth }           from "../hooks/useAuth.js";
-import { getGoogleOAuthUrl } from "../api/auth.api.js";
+import { useAdvisorRequestOTP, parseApiError } from "../hooks/useAdvisorLogin.js";
+import type { OTPChannel } from "@turtle/types";
 
-const MAX_ATTEMPTS = 5;
+const COUNTRY_CODES = [
+  { code: "+91",  label: "🇮🇳 +91"  },
+  { code: "+1",   label: "🇺🇸 +1"   },
+  { code: "+44",  label: "🇬🇧 +44"  },
+  { code: "+61",  label: "🇦🇺 +61"  },
+  { code: "+971", label: "🇦🇪 +971" },
+  { code: "+65",  label: "🇸🇬 +65"  },
+  { code: "+60",  label: "🇲🇾 +60"  },
+];
+
+function formatPhone(value: string): string {
+  const digits = value.replace(/\D/g, "");
+  if (digits.length <= 5)  return digits;
+  if (digits.length <= 10) return `${digits.slice(0, 5)}-${digits.slice(5)}`;
+  return `${digits.slice(0, 5)}-${digits.slice(5, 10)}`;
+}
 
 export function LoginPage() {
   const navigate      = useNavigate();
-  const { setSessionId } = useAuth();
-  const loginMut      = useAdvisorLogin();
+  const requestOTPMut = useAdvisorRequestOTP();
 
-  const [username,      setUsername]      = useState("");
-  const [password,      setPassword]      = useState("");
-  const [error,         setError]         = useState("");
-  const [attempts,      setAttempts]      = useState(0);
-  const [oauthLoading,  setOauthLoading]  = useState(false);
+  const [channel,     setChannel]     = useState<OTPChannel>("sms");
+  const [countryCode, setCountryCode] = useState("+91");
+  const [phone,       setPhone]       = useState("");
+  const [email,       setEmail]       = useState("");
+  const [error,       setError]       = useState("");
 
-  const isLocked  = attempts >= MAX_ATTEMPTS;
-  const isValid   = username.trim().length >= 3 && password.length >= 8;
-  const isPending = loginMut.isPending;
+  const destination =
+    channel === "sms"
+      ? `${countryCode}${phone.replace(/\D/g, "")}`
+      : email.trim();
+
+  const isValid =
+    channel === "sms"
+      ? phone.replace(/\D/g, "").length >= 10
+      : /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!isValid || isLocked) return;
     setError("");
+    if (!isValid) return;
 
     try {
-      const res = await loginMut.mutateAsync({ username: username.trim(), password });
-      // Clear password from component state immediately after submission
-      setPassword("");
-      setSessionId(res.sessionId);
+      const res = await requestOTPMut.mutateAsync({ channel, destination });
       navigate("/verify-otp", {
-        state: { sessionId: res.sessionId, expiresIn: res.expiresIn },
+        state: {
+          channel,
+          destination,
+          requestId: res.requestId,
+          expiresIn: res.expiresIn,
+        },
       });
     } catch (err) {
-      setPassword("");
-      const next = attempts + 1;
-      setAttempts(next);
-      if (next >= MAX_ATTEMPTS) {
-        setError("Account locked. Please contact IT support.");
-      } else {
-        const base = parseApiError(err);
-        setError(`${base} (attempt ${next} of ${MAX_ATTEMPTS})`);
-      }
+      setError(parseApiError(err));
     }
-  }
-
-  function handleGoogleLogin() {
-    setOauthLoading(true);
-    window.location.href = getGoogleOAuthUrl();
   }
 
   return (
@@ -61,127 +67,107 @@ export function LoginPage() {
 
         <div className="bg-white rounded-2xl shadow-xl p-8">
 
-          {/* Logo + heading */}
           <div className="flex justify-center mb-6">
             <TurtleLogo size={48} />
           </div>
           <h1 className="text-xl font-bold text-gray-900 text-center mb-0.5">
-            Turtle Team Login
+            Advisor Portal
           </h1>
-          <p className="text-xs text-gray-400 text-center mb-6">
-            Advisor &amp; Staff Portal
+          <p className="text-sm text-gray-500 text-center mb-6">
+            We'll send you a one-time password
           </p>
 
-          {/* Lockout banner */}
-          {isLocked ? (
-            <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-center">
-              <p className="text-sm font-semibold text-red-700 mb-1">Account Locked</p>
-              <p className="text-xs text-red-500">
-                Too many failed attempts. Please contact{" "}
-                <a href="mailto:it-support@turtlecorporate.com" className="underline">
-                  IT support
-                </a>
-                .
-              </p>
-            </div>
-          ) : (
-            <form onSubmit={handleSubmit} noValidate>
+          {/* Channel toggle */}
+          <div
+            role="tablist"
+            aria-label="Login method"
+            className="flex rounded-lg bg-gray-100 p-1 mb-5"
+          >
+            {(["sms", "email"] as OTPChannel[]).map((ch) => (
+              <button
+                key={ch}
+                role="tab"
+                aria-selected={channel === ch}
+                type="button"
+                onClick={() => { setChannel(ch); setError(""); }}
+                className={`flex-1 py-2 text-sm font-medium rounded-md transition-colors ${
+                  channel === ch
+                    ? "bg-white text-brand-700 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                {ch === "sms" ? "📱 Phone" : "✉️ Email"}
+              </button>
+            ))}
+          </div>
 
-              {/* Username */}
+          <form onSubmit={handleSubmit} noValidate>
+            {channel === "sms" ? (
               <div className="mb-4">
-                <label htmlFor="username" className="block text-sm font-medium text-gray-700 mb-1">
-                  Username
+                <label htmlFor="phone" className="block text-sm font-medium text-gray-700 mb-1">
+                  Mobile number
+                </label>
+                <div className="flex gap-2">
+                  <select
+                    value={countryCode}
+                    onChange={(e) => setCountryCode(e.target.value)}
+                    aria-label="Country code"
+                    className="border border-gray-300 rounded-lg px-2 py-2.5 text-sm text-gray-700 bg-white focus:outline-none focus:ring-2 focus:ring-brand-700 focus:border-brand-700"
+                  >
+                    {COUNTRY_CODES.map((c) => (
+                      <option key={c.code} value={c.code}>{c.label}</option>
+                    ))}
+                  </select>
+                  <input
+                    id="phone"
+                    type="tel"
+                    inputMode="numeric"
+                    autoComplete="tel"
+                    placeholder="98765-43210"
+                    value={phone}
+                    onChange={(e) => setPhone(formatPhone(e.target.value))}
+                    className="flex-1 border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-700 focus:border-brand-700"
+                    aria-required="true"
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="mb-4">
+                <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
+                  Email address
                 </label>
                 <input
-                  id="username"
-                  type="text"
-                  autoComplete="username"
-                  autoCapitalize="none"
-                  spellCheck={false}
-                  placeholder="your.username"
-                  value={username}
-                  onChange={(e) => setUsername(e.target.value)}
-                  disabled={isPending}
-                  aria-required="true"
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm
-                    focus:outline-none focus:ring-2 focus:ring-brand-700 focus:border-brand-700
-                    disabled:bg-gray-50"
-                />
-              </div>
-
-              {/* Password */}
-              <div className="mb-1">
-                <PasswordInput
-                  id="password"
-                  label="Password"
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  disabled={isPending}
+                  id="email"
+                  type="email"
+                  autoComplete="email"
+                  placeholder="you@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-700 focus:border-brand-700"
                   aria-required="true"
                 />
               </div>
+            )}
 
-              {/* Forgot password */}
-              <div className="text-right mb-4">
-                <Link
-                  to="/forgot-password"
-                  className="text-xs text-brand-700 hover:text-brand-800 hover:underline"
-                >
-                  Forgot password?
-                </Link>
+            {error && (
+              <div className="mb-4">
+                <ErrorMessage message={error} onDismiss={() => setError("")} />
               </div>
+            )}
 
-              {error && (
-                <div className="mb-4">
-                  <ErrorMessage message={error} onDismiss={() => setError("")} />
-                </div>
-              )}
-
-              <button
-                type="submit"
-                disabled={!isValid || isPending}
-                aria-busy={isPending}
-                className="w-full bg-brand-700 hover:bg-brand-800 disabled:bg-gray-200
-                  disabled:cursor-not-allowed text-white font-semibold py-2.5 rounded-lg
-                  transition-colors flex items-center justify-center gap-2 mb-4"
-              >
-                {isPending && <LoadingSpinner size={16} color="#fff" label="" />}
-                {isPending ? "Signing in…" : "Sign in"}
-              </button>
-            </form>
-          )}
-
-          {/* Divider */}
-          {!isLocked && (
-            <>
-              <div className="relative mb-4">
-                <div className="absolute inset-0 flex items-center">
-                  <div className="w-full border-t border-gray-200" />
-                </div>
-                <div className="relative flex justify-center text-xs">
-                  <span className="px-2 bg-white text-gray-400">or</span>
-                </div>
-              </div>
-
-              <GoogleOAuthButton
-                loading={oauthLoading}
-                onClick={handleGoogleLogin}
-              />
-            </>
-          )}
+            <button
+              type="submit"
+              disabled={!isValid || requestOTPMut.isPending}
+              aria-busy={requestOTPMut.isPending}
+              className="w-full bg-brand-700 hover:bg-brand-800 disabled:bg-gray-300 disabled:cursor-not-allowed text-white font-semibold py-2.5 rounded-lg transition-colors flex items-center justify-center gap-2"
+            >
+              {requestOTPMut.isPending && <LoadingSpinner size={18} color="#fff" label="" />}
+              {requestOTPMut.isPending ? "Sending OTP…" : "Send OTP"}
+            </button>
+          </form>
         </div>
 
-        {/* Register link */}
         <p className="text-center text-xs text-gray-500 mt-4">
-          New advisor?{" "}
-          <Link to="/register" className="text-brand-700 hover:underline font-medium">
-            Create an account
-          </Link>
-        </p>
-
-        {/* Footer */}
-        <p className="text-center text-xs text-gray-500 mt-2">
           For internal use only · Turtle Corporate
         </p>
       </div>
