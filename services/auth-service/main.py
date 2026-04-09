@@ -33,7 +33,7 @@ app = FastAPI(title="auth-service", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.client_app_url, settings.advisor_app_url],
+    allow_origins=[settings.client_app_url, settings.advisor_app_url, settings.internal_app_url],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

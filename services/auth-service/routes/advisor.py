@@ -11,7 +11,7 @@ from pydantic import BaseModel, field_validator
 from redis_client import get_redis
 from eventbus import publish_event
 from config import settings
-from auth_utils import verify_otp_with_service, issue_tokens, set_auth_cookie
+from auth_utils import verify_otp_with_service, issue_tokens, set_token_cookies, mask
 from logger import get_logger
 
 router = APIRouter(prefix="/auth/advisor", tags=["advisor"])
@@ -53,8 +53,30 @@ class AdvisorLoginBody(BaseModel):
         return v
 
 
+class AdvisorRequestOTPBody(BaseModel):
+    channel: str  # "sms" | "email"
+    destination: str
+
+    @field_validator("channel")
+    @classmethod
+    def validate_channel(cls, v: str) -> str:
+        if v not in ("sms", "email"):
+            raise ValueError("channel must be sms or email")
+        return v
+
+    @field_validator("destination")
+    @classmethod
+    def validate_destination(cls, v: str) -> str:
+        phone = re.match(r"^\+?[1-9]\d{6,14}$", v)
+        email = re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", v)
+        if not phone and not email:
+            raise ValueError("destination must be a valid phone number or email")
+        return v
+
+
 class AdvisorVerifyOTPBody(BaseModel):
-    sessionId: str
+    requestId: str
+    destination: str
     otp: str
 
     @field_validator("otp")
@@ -146,6 +168,43 @@ async def advisor_register(body: AdvisorRegisterBody):
     }
 
 
+@router.post("/request-otp", status_code=202)
+async def advisor_request_otp(body: AdvisorRequestOTPBody):
+    request_id = str(uuid.uuid4())
+    r = get_redis()
+
+    await r.setex(
+        f"otp:pending:{request_id}",
+        settings.otp_expires_in_seconds,
+        json.dumps({"channel": body.channel, "destination": body.destination, "verified": False}),
+    )
+
+    await publish_event("auth.otp.requested", {
+        "topic": "auth.otp.requested",
+        "userId": body.destination,
+        "channel": body.channel,
+        "target": body.destination,
+        "userType": "advisor",
+        "requestedAt": datetime.now(timezone.utc).isoformat(),
+    })
+
+    logger.info(
+        "advisor_otp_requested",
+        extra={
+            "request_id": request_id,
+            "channel": body.channel,
+            "destination": mask(body.destination),
+            "expires_in": settings.otp_expires_in_seconds,
+        },
+    )
+
+    return {
+        "requestId": request_id,
+        "expiresIn": settings.otp_expires_in_seconds,
+        "message": f"OTP sent via {body.channel}",
+    }
+
+
 @router.post("/login")
 async def advisor_login(body: AdvisorLoginBody, request: Request):
     ip = request.client.host if request.client else "unknown"
@@ -225,41 +284,50 @@ async def advisor_verify_otp(body: AdvisorVerifyOTPBody, request: Request, respo
     user_agent = request.headers.get("user-agent", "")
     r = get_redis()
 
-    session_raw = await r.get(f"advisor:session:{body.sessionId}")
-    if not session_raw:
-        logger.warning("advisor_otp_verify_failed", extra={"reason": "session_not_found", "session_id": body.sessionId, "ip": ip})
-        raise HTTPException(400, "Session not found or expired. Please log in again.")
+    pending_raw = await r.get(f"otp:pending:{body.requestId}")
+    if not pending_raw:
+        logger.warning("advisor_otp_verify_failed", extra={"reason": "request_not_found", "request_id": body.requestId, "ip": ip})
+        raise HTTPException(400, "OTP request not found or expired")
 
-    session = json.loads(session_raw)
+    pending = json.loads(pending_raw)
 
-    if session["step"] != "awaiting_otp":
-        logger.warning("advisor_otp_verify_failed", extra={"reason": "invalid_session_state", "step": session["step"], "ip": ip})
-        raise HTTPException(400, "Invalid session state")
+    if pending["destination"] != body.destination:
+        logger.warning(
+            "advisor_otp_verify_failed",
+            extra={"reason": "destination_mismatch", "request_id": body.requestId, "destination": mask(body.destination), "ip": ip},
+        )
+        raise HTTPException(400, "Destination does not match OTP request")
 
     verification = await verify_otp_with_service(
-        channel=session["otpChannel"],
-        destination=session["otpTarget"],
+        channel=pending["channel"],
+        destination=body.destination,
         otp=body.otp,
-        user_id=session["advisorId"],
+        user_id=body.destination,
         user_type="advisor",
     )
 
     if not verification["valid"]:
         logger.warning(
             "advisor_otp_verify_failed",
-            extra={"reason": verification.get("reason", "invalid_otp"), "advisor_id": session["advisorId"], "ip": ip},
+            extra={"reason": verification.get("reason", "invalid_otp"), "request_id": body.requestId, "destination": mask(body.destination), "ip": ip},
         )
         raise HTTPException(verification.get("status_code", 400), verification["error"])
 
-    await r.delete(f"advisor:session:{body.sessionId}")
+    await r.delete(f"otp:pending:{body.requestId}")
 
-    access_token, refresh_token, session_id = await issue_tokens(
-        session["advisorId"], "advisor", session["role"]
-    )
+    access_token, refresh_token, session_id = await issue_tokens(body.destination, "advisor", "advisor")
+
+    await publish_event("auth.otp.verified", {
+        "topic": "auth.otp.verified",
+        "userId": body.destination,
+        "channel": pending["channel"],
+        "userType": "advisor",
+        "verifiedAt": datetime.now(timezone.utc).isoformat(),
+    })
 
     await publish_event("auth.login.success", {
         "topic": "auth.login.success",
-        "userId": session["advisorId"],
+        "userId": body.destination,
         "userType": "advisor",
         "authMethod": "otp",
         "sessionId": session_id,
@@ -268,10 +336,7 @@ async def advisor_verify_otp(body: AdvisorVerifyOTPBody, request: Request, respo
         "loggedInAt": datetime.now(timezone.utc).isoformat(),
     })
 
-    logger.info(
-        "advisor_login_success",
-        extra={"advisor_id": session["advisorId"], "role": session["role"], "session_id": session_id, "ip": ip},
-    )
+    logger.info("advisor_otp_verified", extra={"user_id": mask(body.destination), "session_id": session_id})
 
-    set_auth_cookie(response, access_token)
-    return {"accessToken": access_token, "refreshToken": refresh_token, "sessionId": session_id}
+    set_token_cookies(response, access_token, refresh_token)
+    return {"accessToken": access_token, "sessionId": session_id}

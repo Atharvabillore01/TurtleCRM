@@ -3,7 +3,8 @@ import { verifyAdvisorOTP } from "../api/auth.api.js";
 
 export function useOTPVerify() {
   return useMutation({
-    mutationFn: ({ sessionId, otp }: { sessionId: string; otp: string }) =>
-      verifyAdvisorOTP(sessionId, otp),
+    mutationFn: ({ requestId, destination, otp }: { requestId: string; destination: string; otp: string }) =>
+      verifyAdvisorOTP(requestId, destination, otp),
+    onError: () => {},
   });
 }
