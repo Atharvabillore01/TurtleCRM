@@ -1,18 +1,25 @@
 # user-service
 
-User profile CRUD — Fastify + Prisma + PostgreSQL. Currently a skeleton with only `/health`.
+User profile CRUD — Python/FastAPI + SQLAlchemy + PostgreSQL.
 
-**Port:** 4002 | **Dev:** `npm run dev` (`tsx watch src/index.ts`)
+**Runtime:** Python 3.12 + FastAPI + Uvicorn  
+**Port:** 4002  
+**Dev:** `uvicorn main:app --reload --port 4002`
 
 ## Key files
-- `src/index.ts` — Fastify entry, only `/health` route exists
-- `prisma/schema.prisma` — data model (add models here)
+
+- `main.py` — FastAPI entry, router registration
+- `database.py` — async SQLAlchemy engine + session factory (asyncpg driver)
+- `models.py` — SQLAlchemy ORM models
+- `config.py` — pydantic-settings env loader
 
 ## Non-obvious patterns
-- Uses Prisma for DB access — run `npx prisma migrate dev` after schema changes
-- Fastify (not Express) — use `fastify.register()` for plugins, `fastify.get/post()` for routes
-- Other services do NOT call user-service yet — no inter-service HTTP wired up
+
+- Uses SQLAlchemy async (asyncpg driver) — not Prisma, not synchronous SQLAlchemy
+- Migrations managed with Alembic: `alembic upgrade head` after model changes
+- Other services do not call user-service yet — no inter-service HTTP wired up
 
 ## Rules
-- All DB access through Prisma client only
+
+- All DB access through SQLAlchemy async session only
 - Keep route handlers thin — business logic in separate service files

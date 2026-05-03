@@ -1,7 +1,9 @@
+import asyncio
 import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request, Depends
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -9,22 +11,46 @@ from sqlalchemy.ext.asyncio import AsyncSession
 import bcrypt as bcrypt_lib
 
 from config import settings
+from consumer import start_consumers
 from database import get_db, create_tables
+from eventbus import disconnect_publisher
 from models import User, Advisor
+from routes.transcript import router as transcript_router
 from logger import get_logger
 
 logger = get_logger("user-service")
 
+_consumer_task: asyncio.Task | None = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _consumer_task
     await create_tables()
+    _consumer_task = asyncio.create_task(start_consumers())
     logger.info("user-service started", extra={"env": settings.node_env})
     yield
+    if _consumer_task:
+        _consumer_task.cancel()
+        try:
+            await _consumer_task
+        except asyncio.CancelledError:
+            pass
+    await disconnect_publisher()
     logger.info("user-service shut down")
 
 
 app = FastAPI(title="user-service", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3002", "http://localhost:3000", "http://localhost:3001"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(transcript_router)
 
 
 @app.middleware("http")

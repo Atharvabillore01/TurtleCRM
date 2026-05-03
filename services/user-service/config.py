@@ -8,6 +8,8 @@ class Settings(BaseSettings):
     user_service_port: int = 4002
 
     database_url: str = "postgresql+asyncpg://turtle:changeme@localhost:5432/turtle_corporate"
+    rabbitmq_url: str = "amqp://guest:guest@localhost:5672"
+    crm_ai_service_url: str = "http://localhost:5000"
 
 
 settings = Settings()

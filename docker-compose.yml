@@ -4,6 +4,24 @@ services:
 
   # ─── Infrastructure ────────────────────────────────────────────────────────
 
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-turtle}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-turtle_corporate}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-turtle} -d ${POSTGRES_DB:-turtle_corporate}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -107,9 +125,17 @@ services:
     env_file: .env
     environment:
       NODE_ENV: production
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-turtle}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-turtle_corporate}
+      RABBITMQ_URL: amqp://turtle:${RABBITMQ_PASS:-changeme}@rabbitmq:5672
+      CRM_AI_SERVICE_URL: ${CRM_AI_SERVICE_URL:-http://localhost:5000}
     volumes:
       - ./logs/user-service:/app/logs
       - ./logs/combined:/app/logs/combined
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4002/health')\""]
       interval: 15s
@@ -189,13 +215,16 @@ services:
     build:
       context: .
       dockerfile: apps/internal-app/Dockerfile
+      args:
+        VITE_AUTH_SERVICE_URL: http://localhost:4000
+        VITE_USER_SERVICE_URL: http://localhost:4002
+        VITE_SHOW_DEV_TOGGLE: ${VITE_SHOW_DEV_TOGGLE:-true}
     restart: unless-stopped
     ports:
       - "3002:3002"
     env_file: .env
     environment:
       NODE_ENV: production
-      VITE_AUTH_SERVICE_URL: http://localhost:4000
     depends_on:
       auth-service:
         condition: service_healthy
@@ -207,5 +236,6 @@ services:
       start_period: 30s
 
 volumes:
+  postgres_data:
   redis_data:
   rabbitmq_data:

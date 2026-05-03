@@ -3,10 +3,14 @@ from sqlalchemy.orm import DeclarativeBase
 
 from config import get_db_url
 
+import os
+
+_ssl = os.getenv("DATABASE_SSL", "false").lower() not in ("false", "0", "")
+
 engine = create_async_engine(
     get_db_url(),
     echo=False,
-    connect_args={"ssl": "require"},  # Neon requires SSL
+    connect_args={"ssl": "require"} if _ssl else {},
 )
 
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
@@ -22,6 +26,6 @@ async def get_db():
 
 
 async def create_tables() -> None:
-    from models import User, Advisor  # noqa: F401
+    from models import User, Advisor, TranscriptExtraction  # noqa: F401
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
