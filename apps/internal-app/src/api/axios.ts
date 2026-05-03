@@ -3,7 +3,8 @@ import axios, {
   type InternalAxiosRequestConfig,
 } from "axios";
 
-const BASE_URL = import.meta.env["VITE_AUTH_SERVICE_URL"] ?? "http://localhost:4000";
+const BASE_URL      = import.meta.env["VITE_AUTH_SERVICE_URL"]  ?? "http://localhost:4000";
+const USER_BASE_URL = import.meta.env["VITE_USER_SERVICE_URL"] ?? "http://localhost:4002";
 
 let _accessToken: string | null = null;
 let _isRefreshing = false;
@@ -25,6 +26,21 @@ export const authAxios: AxiosInstance = axios.create({
 });
 
 authAxios.interceptors.request.use(
+  (config: InternalAxiosRequestConfig) => {
+    if (_accessToken) config.headers.set("Authorization", `Bearer ${_accessToken}`);
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
+
+// ─── User-service axios (plain Bearer, no refresh retry needed) ───────────────
+
+export const userAxios: AxiosInstance = axios.create({
+  baseURL: USER_BASE_URL,
+  headers: { "Content-Type": "application/json" },
+});
+
+userAxios.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
     if (_accessToken) config.headers.set("Authorization", `Bearer ${_accessToken}`);
     return config;

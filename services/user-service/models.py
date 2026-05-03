@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import String, Boolean, DateTime, func
+from sqlalchemy import String, Boolean, DateTime, Text, JSON, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from database import Base
@@ -46,3 +46,14 @@ class Advisor(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_now, onupdate=_now
     )
+
+
+class TranscriptExtraction(Base):
+    """Field extractions produced from call transcripts."""
+    __tablename__ = "transcript_extractions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    client_id: Mapped[str] = mapped_column(String(255), nullable=False, index=True)
+    raw_transcript: Mapped[str] = mapped_column(Text, nullable=False)
+    extracted_json: Mapped[dict] = mapped_column(JSON, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_now)
