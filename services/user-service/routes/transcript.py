@@ -28,8 +28,8 @@ async def extract_fields(body: ExtractRequest, db: AsyncSession = Depends(get_db
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
-                f"{settings.crm_ai_service_url}/extract",
-                json={
+                f"{settings.crm_ai_service_url}/extract",  
+                json={ # agents will be passed 
                     "transcript": body.transcript,
                     "client_id": body.clientId,
                     "client_name": body.clientName,
