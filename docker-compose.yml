@@ -62,6 +62,7 @@ services:
       context: .
       dockerfile: services/auth-service/Dockerfile
     restart: unless-stopped
+    stop_grace_period: 45s
     ports:
       - "4000:4000"
     env_file: .env
@@ -73,6 +74,7 @@ services:
       OTP_SERVICE_URL: http://otp-service:4001
       USER_SERVICE_URL: http://user-service:4002
       NOTIFICATION_SERVICE_URL: http://notification-service:4003
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318/v1/traces
     volumes:
       - ./logs/auth-service:/app/logs
       - ./logs/combined:/app/logs/combined
@@ -93,6 +95,7 @@ services:
       context: .
       dockerfile: services/otp-service/Dockerfile
     restart: unless-stopped
+    stop_grace_period: 45s
     ports:
       - "4001:4001"
     env_file: .env
@@ -100,6 +103,7 @@ services:
       NODE_ENV: production
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       RABBITMQ_URL: amqp://turtle:${RABBITMQ_PASS:-changeme}@rabbitmq:5672
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318/v1/traces
     volumes:
       - ./logs/otp-service:/app/logs
       - ./logs/combined:/app/logs/combined
@@ -148,16 +152,21 @@ services:
       context: .
       dockerfile: services/notification-service/Dockerfile
     restart: unless-stopped
+    stop_grace_period: 45s
     ports:
       - "4003:4003"
     env_file: .env
     environment:
       NODE_ENV: production
       RABBITMQ_URL: amqp://turtle:${RABBITMQ_PASS:-changeme}@rabbitmq:5672
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318/v1/traces
     volumes:
       - ./logs/notification-service:/app/logs
       - ./logs/combined:/app/logs/combined
     depends_on:
+      redis:
+        condition: service_healthy
       rabbitmq:
         condition: service_healthy
     healthcheck:
@@ -166,6 +175,22 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+
+  outbox-publisher:
+    build:
+      context: .
+      dockerfile: services/auth-service/Dockerfile
+    command: python workers/outbox_publisher.py
+    restart: unless-stopped
+    stop_grace_period: 45s
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-turtle}:${POSTGRES_PASSWORD:-changeme}@postgres:5432/${POSTGRES_DB:-turtle_corporate}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER:-turtle}:${RABBITMQ_PASS:-changeme}@rabbitmq:5672
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
 
   # ─── Frontend Apps ─────────────────────────────────────────────────────────
 
@@ -235,7 +260,62 @@ services:
       retries: 3
       start_period: 30s
 
+  # ─── Observability Stack ───────────────────────────────────────────────────
+
+  tempo:
+    image: grafana/tempo:latest
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./monitoring/tempo.yaml:/etc/tempo.yaml
+      - tempo_data:/tmp/tempo
+    ports:
+      - "3200:3200"   # Tempo HTTP API
+      - "4318:4318"   # OTLP HTTP receiver
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+    ports:
+      - "9093:9093"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3030:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    depends_on:
+      - prometheus
+      - tempo
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   redis_data:
   rabbitmq_data:
+  tempo_data:
+  prometheus_data:
+  grafana_data:

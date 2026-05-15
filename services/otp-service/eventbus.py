@@ -11,6 +11,9 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 EXCHANGE_NAME = "turtle.events"
+DLX_EXCHANGE_NAME = "turtle.dlx"
+MAX_RETRY_COUNT = 3
+PREFETCH_COUNT = 10
 
 _pub_connection: AbstractRobustConnection | None = None
 _pub_channel: AbstractChannel | None = None
@@ -56,31 +59,60 @@ async def start_consumer(
     queue_prefix: str,
     handler: Callable[[dict], Awaitable[None]],
 ) -> None:
-    """Connects, subscribes, and blocks until cancelled."""
+    """Connects, subscribes with DLQ support, and blocks until cancelled."""
     conn = await aio_pika.connect_robust(settings.rabbitmq_url)
     channel = await conn.channel()
-    await channel.set_qos(prefetch_count=1)
+    await channel.set_qos(prefetch_count=PREFETCH_COUNT)
 
     exchange = await channel.declare_exchange(EXCHANGE_NAME, ExchangeType.TOPIC, durable=True)
+    dlx_exchange = await channel.declare_exchange(DLX_EXCHANGE_NAME, ExchangeType.TOPIC, durable=True)
 
     queue_name = f"{queue_prefix}.{topic}"
+    dlq_name = f"{queue_name}.dlq"
+
+    # Declare DLQ bound to dead-letter exchange
+    dlq = await channel.declare_queue(dlq_name, durable=True, arguments={"x-queue-mode": "lazy"})
+    await dlq.bind(dlx_exchange, routing_key=f"{topic}.failed")
+
+    # Main queue with DLX routing
     queue = await channel.declare_queue(
         queue_name,
         durable=True,
-        arguments={"x-message-ttl": settings.otp_expires_in_seconds * 1000},
+        arguments={
+            "x-message-ttl": settings.otp_expires_in_seconds * 1000,
+            "x-dead-letter-exchange": DLX_EXCHANGE_NAME,
+            "x-dead-letter-routing-key": f"{topic}.failed",
+        },
     )
     await queue.bind(exchange, routing_key=topic)
 
     async def on_message(msg: aio_pika.IncomingMessage) -> None:
+        retry_count = int(msg.headers.get("x-retry-count", 0)) if msg.headers else 0
         async with msg.process(requeue=False):
             try:
                 data = json.loads(msg.body.decode())
                 await handler(data)
             except Exception as e:
-                logger.error(f"[rabbitmq] handler error on {topic}: {e}", exc_info=True)
+                logger.error(f"[rabbitmq] handler error on {topic} (attempt {retry_count + 1}): {e}", exc_info=True)
+                if retry_count < MAX_RETRY_COUNT:
+                    headers = dict(msg.headers) if msg.headers else {}
+                    headers["x-retry-count"] = retry_count + 1
+                    await exchange.publish(
+                        Message(
+                            body=msg.body,
+                            headers=headers,
+                            delivery_mode=DeliveryMode.PERSISTENT,
+                            content_type="application/json",
+                        ),
+                        routing_key=topic,
+                    )
+                    logger.info(f"[rabbitmq] requeued {topic} (retry {retry_count + 1}/{MAX_RETRY_COUNT})")
+                else:
+                    logger.error(f"[rabbitmq] max retries reached for {topic}, routing to DLQ")
+                    raise  # triggers nack → DLX routing
 
     await queue.consume(on_message)
-    logger.info(f"[rabbitmq] consuming '{topic}' via queue '{queue_name}'")
+    logger.info(f"[rabbitmq] consuming '{topic}' via queue '{queue_name}' (DLQ: '{dlq_name}')")
 
     try:
         await asyncio.Future()  # blocks until task is cancelled
