@@ -31,6 +31,22 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="auth-service", lifespan=lifespan)
 
+try:
+    from tracing import setup_tracing
+    setup_tracing(app, "auth-service")
+except ImportError:
+    pass  # opentelemetry packages not installed — tracing disabled
+
+try:
+    from metrics import metrics_middleware, metrics_endpoint
+    app.middleware("http")(metrics_middleware)
+
+    @app.get("/metrics", include_in_schema=False)
+    async def _metrics():
+        return await metrics_endpoint()
+except ImportError:
+    pass  # prometheus_client not installed
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.client_app_url, settings.advisor_app_url, settings.internal_app_url],
