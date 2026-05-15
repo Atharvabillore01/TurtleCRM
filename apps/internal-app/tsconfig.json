@@ -8,6 +8,8 @@
     "moduleResolution": "bundler",
     "jsx": "react-jsx",
     "outDir": "./dist",
+    "allowJs": true,
+    "skipLibCheck": true,
     "paths": {
       "@turtle/types": ["packages/types/src/index.ts"],
       "@turtle/ui":    ["packages/ui/src/index.ts"]
