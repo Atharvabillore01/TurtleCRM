@@ -2,14 +2,12 @@ import datetime
 import logging
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from config import settings
-from database import get_db
+from db.user_procs import proc_save_transcript_extraction
 from eventbus import publish_event
-from models import TranscriptExtraction
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/transcript", tags=["transcript"])
@@ -22,14 +20,14 @@ class ExtractRequest(BaseModel):
 
 
 @router.post("/extract", status_code=200)
-async def extract_fields(body: ExtractRequest, db: AsyncSession = Depends(get_db)):
+async def extract_fields(body: ExtractRequest):
     logger.info("transcript_extract_requested", extra={"client_id": body.clientId})
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
-                f"{settings.crm_ai_service_url}/extract",  
-                json={ # agents will be passed 
+                f"{settings.crm_ai_service_url}/extract",
+                json={
                     "transcript": body.transcript,
                     "client_id": body.clientId,
                     "client_name": body.clientName,
@@ -44,14 +42,11 @@ async def extract_fields(body: ExtractRequest, db: AsyncSession = Depends(get_db
         logger.error("ai_service_unreachable", extra={"error": str(exc), "client_id": body.clientId})
         raise HTTPException(503, "AI extraction service is unreachable")
 
-    record = TranscriptExtraction(
+    record = await proc_save_transcript_extraction(
         client_id=body.clientId,
         raw_transcript=body.transcript,
         extracted_json=ai_result,
     )
-    db.add(record)
-    await db.commit()
-    await db.refresh(record)
 
     await publish_event("crm.fields.extracted", {
         "clientId": body.clientId,
