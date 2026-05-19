@@ -9,6 +9,8 @@ COPY services/otp-service/config.py        .
 COPY services/otp-service/redis_client.py  .
 COPY services/otp-service/eventbus.py      .
 COPY services/otp-service/circuit_breaker.py .
+COPY services/otp-service/tracing.py        .
+COPY services/otp-service/metrics.py        .
 COPY services/otp-service/consumer.py       .
 COPY services/otp-service/main.py           .
 COPY services/otp-service/schemas/          ./schemas/
