@@ -35,7 +35,7 @@ function IconSettings() {
 
 const NAV = [
   { path: "/dashboard", label: "Dashboard",    Icon: IconHome },
-  { path: "/autofill",  label: "AI Autofill",  Icon: IconSparkles },
+  { path: "/dashboard/ai-validation", label: "AI Validation", Icon: IconSparkles },
 ];
 
 export function AppLayout() {

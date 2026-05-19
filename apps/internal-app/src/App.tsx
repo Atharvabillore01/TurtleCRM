@@ -15,7 +15,6 @@ import ManageAdvisorsPage from "./routes/ManageAdvisorsPage";
 import ManageTeamPage from "./routes/ManageTeamPage";
 import ManageTagsPage from "./routes/ManageTagsPage";
 import ManageMilestonesPage from "./routes/ManageMilestonesPage";
-import {AutofillPage} from "./pages/AutofillPage";
 import PlaceholderModule from "./components/shared/PlaceholderModule";
 
 export default function App() {
@@ -46,7 +45,6 @@ export default function App() {
         <Route path="manage-milestones"     element={<ManageMilestonesPage />} />
         <Route path="manage-tags"           element={<ManageTagsPage />} />
         <Route path="manage-membership" element={<PlaceholderModule title="Manage Membership" />} />
-        <Route path="autofill"          element={<AutofillPage />} />
       </Route>
 
       {/* Catch-all → /dashboard */}

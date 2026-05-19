@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   AiBrainIcon,
@@ -17,11 +17,11 @@ import {
   initialTasks,
   initialLeads,
   initialOnboardingProspects,
-  initialSchedulingRecords,
   initialEmailTrackerEntries,
   initialAdvisors,
   initialTeamMembers,
 } from "../data/mockData";
+import { fetchMeetings } from "../api/meetingApi";
 
 const stats = [
   {
@@ -80,14 +80,6 @@ const stats = [
     color: "from-[rgba(46,222,190,0.08)] to-[rgba(46,222,190,0.03)]",
     border: "border-[rgba(46,222,190,0.2)]",
   },
-  {
-    label: "Scheduling Records",
-    getValue: () => initialSchedulingRecords.length,
-    icon: Calendar03Icon,
-    path: "/dashboard/scheduling",
-    color: "from-[rgba(255,193,87,0.08)] to-[rgba(255,193,87,0.03)]",
-    border: "border-[rgba(255,193,87,0.2)]",
-  },
 ];
 
 const quickLinks = [
@@ -100,6 +92,26 @@ const quickLinks = [
 ];
 
 export default function DashboardPage() {
+  const [schedulingCount, setSchedulingCount] = useState<number | null>(null);
+
+  useEffect(() => {
+    fetchMeetings()
+      .then((data) => setSchedulingCount(data.length))
+      .catch(() => setSchedulingCount(0));
+  }, []);
+
+  const liveStats = [
+    ...stats,
+    {
+      label: "Scheduling Records",
+      getValue: () => schedulingCount ?? "…",
+      icon: Calendar03Icon,
+      path: "/dashboard/scheduling",
+      color: "from-[rgba(255,193,87,0.08)] to-[rgba(255,193,87,0.03)]",
+      border: "border-[rgba(255,193,87,0.2)]",
+    },
+  ];
+
   const now = new Date();
   const hour = now.getHours();
   const greeting = hour < 12 ? "Good morning" : hour < 17 ? "Good afternoon" : "Good evening";
@@ -119,7 +131,7 @@ export default function DashboardPage() {
       <section className="p-4 border border-line rounded-2xl bg-[rgba(255,255,255,0.96)] shadow-card">
         <h2 className="mb-4">Overview</h2>
         <div className="grid grid-cols-4 gap-3 mobile:grid-cols-2">
-          {stats.map(({ label, getValue, icon, path, color, border }: any) => (
+          {liveStats.map(({ label, getValue, icon, path, color, border }: any) => (
             <NavLink
               key={path}
               to={path}

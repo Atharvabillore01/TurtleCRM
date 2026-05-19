@@ -1,6 +1,7 @@
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import AiValidationView from "../components/ai-validation/AiValidationView";
-import { attributes, clientProfiles, initialTeamMembers } from "../data/mockData";
+import { attributes, clientProfiles as mockClientProfiles, initialTeamMembers } from "../data/mockData";
+import { fetchExtractions, extractionToMeetingValues } from "../api/meetingApi";
 
 const MEETING_TASK_SEEDS = {
   default: [
@@ -39,8 +40,40 @@ function getSuggestionsForMeeting(meetingId: any, meetingName: any) {
 }
 
 export default function AiValidationPage() {
+  const [clientProfiles, setClientProfiles] = useState<any[]>(mockClientProfiles as any[]);
+
+  useEffect(() => {
+    fetchExtractions()
+      .then((extractions) => {
+        const first = extractions[0];
+        if (!first) return;
+        const liveProfile = {
+          id: first.client_id,
+          name: `Client ${first.client_id}`,
+          segment: "Live",
+          location: "—",
+          advisor: "—",
+          meetings: extractions.map((e) => ({
+            id: e.id,
+            name: `Meeting ${e.meeting_id.slice(-6)}`,
+            date: e.extracted_at.slice(0, 10),
+            confidence: Math.round(
+              Object.values(e.raw_data).reduce((sum, f) => sum + (f.confidence ?? 0), 0) /
+                Object.values(e.raw_data).length * 100,
+            ),
+            transcript: "",
+            values: extractionToMeetingValues(e.raw_data),
+          })),
+        };
+        setClientProfiles([liveProfile, ...(mockClientProfiles as any[])]);
+      })
+      .catch(() => {
+        // meeting-service unavailable — keep mockData
+      });
+  }, []);
+
   const [selectedMeetingId, setSelectedMeetingId] = useState(
-    (clientProfiles as any)[0].meetings[0].id,
+    (mockClientProfiles as any)[0].meetings[0].id,
   );
   const [editedValues, setEditedValues] = useState<Record<string, any>>({});
   const [approvedValues, setApprovedValues] = useState<Record<string, any>>({});

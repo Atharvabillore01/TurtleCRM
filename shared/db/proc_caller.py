@@ -52,7 +52,7 @@ def register_proc(proc_name: str, fn: Callable[..., Awaitable[Any]]) -> None:
     logger.debug(f"[proc_caller] registered → {proc_name}")
 
 
-async def call_proc(proc_name: str, *args: Any) -> ProcResult:
+async def call_proc(proc_name: str, *args: Any, **kwargs: Any) -> ProcResult:
     """
     Call a registered proc handler by name.
     Always returns a ProcResult — never raises for business errors.
@@ -65,4 +65,4 @@ async def call_proc(proc_name: str, *args: Any) -> ProcResult:
             f"Call register_proc('{proc_name}', your_fn) at startup."
         )
     logger.debug(f"[proc_caller] call → {proc_name}{args}")
-    return await fn(*args)
+    return await fn(*args, **kwargs)
