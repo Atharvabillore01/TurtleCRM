@@ -10,8 +10,3 @@ route:
 
 receivers:
   - name: slack
-    slack_configs:
-      - api_url: "${SLACK_WEBHOOK_URL}"
-        channel: "#alerts"
-        title: "TurtleCRM Alert: {{ .GroupLabels.alertname }}"
-        text: "{{ range .Alerts }}{{ .Annotations.description }}{{ end }}"

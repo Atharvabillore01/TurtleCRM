@@ -12,10 +12,10 @@ storage:
   trace:
     backend: local
     local:
-      path: /tmp/tempo/blocks
+      path: /var/tempo/blocks
     wal:
-      path: /tmp/tempo/wal
+      path: /var/tempo/wal
 
 query_frontend:
   search:
-    enabled: true
+    max_duration: 0s

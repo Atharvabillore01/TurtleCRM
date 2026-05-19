@@ -11,6 +11,7 @@ COPY services/otp-service/eventbus.py      .
 COPY services/otp-service/circuit_breaker.py .
 COPY services/otp-service/consumer.py       .
 COPY services/otp-service/main.py           .
+COPY services/otp-service/schemas/          ./schemas/
 COPY services/otp-service/otp/             ./otp/
 COPY services/otp-service/providers/       ./providers/
 

@@ -36,13 +36,23 @@ async def lifespan(app: FastAPI):
         _consumer_task.cancel()
         try:
             await _consumer_task
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, Exception):
             pass
     await disconnect_publisher()
     logger.info("user-service shut down")
 
 
 app = FastAPI(title="user-service", lifespan=lifespan)
+
+try:
+    from metrics import metrics_middleware, metrics_endpoint
+    app.middleware("http")(metrics_middleware)
+
+    @app.get("/metrics", include_in_schema=False)
+    async def _metrics():
+        return await metrics_endpoint()
+except ImportError:
+    pass
 
 app.add_middleware(
     CORSMiddleware,
