@@ -2,9 +2,9 @@ import { createBrowserRouter } from "react-router-dom";
 import { LoginPage }         from "./pages/LoginPage.js";
 import { OAuthCallbackPage } from "./pages/OAuthCallbackPage.js";
 import { DashboardPage }     from "./pages/DashboardPage.js";
-import { AutofillPage }      from "./pages/AutofillPage.js";
 import { AppLayout }         from "./components/AppLayout.js";
 import { ProtectedRoute }    from "./components/ProtectedRoute.js";
+import AiValidationPage      from "./routes/AiValidationPage.js";
 
 export const router = createBrowserRouter([
   { path: "/",             element: <LoginPage /> },
@@ -16,8 +16,8 @@ export const router = createBrowserRouter([
       {
         element: <AppLayout />,
         children: [
-          { path: "/dashboard", element: <DashboardPage /> },
-          { path: "/autofill",  element: <AutofillPage /> },
+          { path: "/dashboard",              element: <DashboardPage /> },
+          { path: "/dashboard/ai-validation", element: <AiValidationPage /> },
         ],
       },
     ],

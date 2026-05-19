@@ -37,13 +37,6 @@ class AdvisorRow:
     is_active: bool = True
 
 
-@dataclass
-class TranscriptRow:
-    id: str
-    client_id: str
-    extracted_json: dict
-
-
 # ── In-memory store (stub only) ───────────────────────────────────────────────
 
 _users: dict[str, UserRow] = {}
@@ -98,25 +91,14 @@ async def _sp_get_advisor_by_username(username: str) -> ProcResult:
     return ProcResult(result=row)
 
 
-async def _sp_save_transcript_extraction(
-    client_id: str,
-    raw_transcript: str,
-    extracted_json: dict,
-) -> ProcResult:
-    row = TranscriptRow(id=str(uuid.uuid4()), client_id=client_id, extracted_json=extracted_json)
-    logger.info("[db] sp_save_transcript_extraction", extra={"record_id": row.id, "client_id": client_id})
-    return ProcResult(result=row)
-
-
 # ── Registration ──────────────────────────────────────────────────────────────
 
 def register_user_mocks() -> None:
     """Call once at service startup (inside lifespan)."""
-    register_proc("sp_create_user",                _sp_create_user)
-    register_proc("sp_get_user",                   _sp_get_user)
-    register_proc("sp_create_advisor",             _sp_create_advisor)
-    register_proc("sp_get_advisor_by_username",    _sp_get_advisor_by_username)
-    register_proc("sp_save_transcript_extraction", _sp_save_transcript_extraction)
+    register_proc("sp_create_user",             _sp_create_user)
+    register_proc("sp_get_user",                _sp_get_user)
+    register_proc("sp_create_advisor",          _sp_create_advisor)
+    register_proc("sp_get_advisor_by_username", _sp_get_advisor_by_username)
 
 
 # ── Public proc calls ─────────────────────────────────────────────────────────
@@ -157,12 +139,3 @@ async def proc_get_advisor_by_username(username: str) -> Optional[AdvisorRow]:
     return res.result  # AdvisorRow | None
 
 
-async def proc_save_transcript_extraction(
-    client_id: str,
-    raw_transcript: str,
-    extracted_json: dict,
-) -> TranscriptRow:
-    res = await call_proc("sp_save_transcript_extraction", client_id, raw_transcript, extracted_json)
-    if not res.ok:
-        raise RuntimeError(f"sp_save_transcript_extraction failed [{res.errornumber}]: {res.errormessage}")
-    return res.result  # TranscriptRow

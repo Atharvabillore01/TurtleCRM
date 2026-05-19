@@ -1,34 +1,115 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import SchedulingView from "../components/scheduling/SchedulingView";
 import SchedulingModal from "../components/scheduling/SchedulingModal";
-import {
-  initialSchedulingRecords,
-  createEmptySchedulingForm,
-  schedulingAdvisorOptions,
-  schedulingClientOptions,
-} from "../data/mockData";
+import { createEmptySchedulingForm } from "../data/mockData";
 import { buildDateTime } from "../utils/dateTime";
-import { createSchedulingRecordFromForm } from "../utils/formatters";
+import { fetchClients, fetchAdvisors, fetchMeetings, scheduleMeeting } from "../api/meetingApi";
+
+function meetingRecordToRow(m: any) {
+  const dt = new Date(m.scheduled_at);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const date = `${pad(dt.getDate())}-${pad(dt.getMonth() + 1)}-${dt.getFullYear()}`;
+  const hours = dt.getHours();
+  const mins = pad(dt.getMinutes());
+  const ampm = hours >= 12 ? "PM" : "AM";
+  const h12 = hours % 12 || 12;
+  const statusMap: Record<string, string> = {
+    scheduled: "Upcoming",
+    cancelled: "Canceled",
+    completed: "Completed",
+    transcribed: "Completed",
+    extraction_completed: "Completed",
+  };
+  return {
+    id: m.id,
+    title: m.title || m.agenda,
+    clientNames: m.client_name || m.client_id,
+    bookedBy: m.member || m.created_by || "",
+    member: m.member || m.created_by || "—",
+    advisor: m.advisor_name || m.advisor_id,
+    guests: m.guests || [],
+    notes: m.notes || "",
+    duration: m.duration_minutes,
+    meetingUrl: m.meeting_url || "",
+    extractionStatus: m.extraction_status || "",
+    datetime: `${date} ${h12}:${mins} ${ampm}`,
+    status: statusMap[m.status] ?? "Upcoming",
+  };
+}
 
 export default function SchedulingPage() {
-  const [records, setRecords] = useState(initialSchedulingRecords);
+  const [records, setRecords] = useState<any[]>([]);
   const [search, setSearch] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [form, setForm] = useState<any>(createEmptySchedulingForm);
+  const [clientOptions, setClientOptions] = useState<any[]>([]);
+  const [advisorOptions, setAdvisorOptions] = useState<any[]>([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchMeetings()
+      .then((data) => setRecords(data.map(meetingRecordToRow)))
+      .catch(() => {
+        // meeting-service unavailable — show empty list
+      });
+    fetchClients()
+      .then((data) => setClientOptions(data))
+      .catch(() => {});
+    fetchAdvisors()
+      .then((data) => setAdvisorOptions(data))
+      .catch(() => {});
+  }, []);
 
   function handleFieldChange(fieldId: any, value: any) {
     setForm((current: any) => ({ ...current, [fieldId]: value }));
   }
 
-  function handleSubmit(event: any) {
+  async function handleSubmit(event: any) {
     event.preventDefault();
-    const newRecord = {
-      id: `SCH-${String(records.length + 1001)}`,
-      ...createSchedulingRecordFromForm(form, buildDateTime),
-    };
-    setRecords((current: any) => [newRecord, ...current]);
-    setForm(createEmptySchedulingForm());
-    setIsModalOpen(false);
+    setIsSubmitting(true);
+    setSubmitError(null);
+
+    const client = form.selectedClients[0];
+    const advisor = form.selectedAdvisors[0];
+
+    if (!client || !advisor) {
+      setSubmitError("Please select at least one client and one advisor.");
+      setIsSubmitting(false);
+      return;
+    }
+
+    const scheduledAt = buildDateTime(form.date, form.time);
+
+    try {
+      const result = await scheduleMeeting({
+        client_id: client.id,
+        advisor_id: advisor.id,
+        scheduled_at: scheduledAt,
+        duration_minutes: parseInt(form.duration ?? "60", 10),
+        agenda: form.agenda || form.title || "",
+        meeting_url: form.meetingUrl || "",
+        created_by: form.bookedBy || "internal-app",
+        title: form.title || form.agenda || "",
+        client_name: client.name,
+        advisor_name: advisor.name,
+        client_email: client.email || "",
+        advisor_email: advisor.email || "",
+        member: form.member || form.bookedBy || "",
+        guests: form.guests || [],
+        notes: form.detailsHappened || "",
+      });
+
+      // Refresh list from service so the new meeting appears with its real ID
+      const updated = await fetchMeetings();
+      setRecords(updated.map(meetingRecordToRow));
+      setForm(createEmptySchedulingForm());
+      setIsModalOpen(false);
+    } catch (err: any) {
+      setSubmitError(err.message ?? "Failed to schedule meeting. Please try again.");
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   function handleClientToggle(client: any) {
@@ -87,10 +168,10 @@ export default function SchedulingPage() {
         <SchedulingModal
           formValues={form}
           onChange={handleFieldChange}
-          clientOptions={schedulingClientOptions.filter((client: any) =>
+          clientOptions={clientOptions.filter((client: any) =>
             client.name.toLowerCase().includes(form.clientSearch.trim().toLowerCase()),
           )}
-          advisorOptions={schedulingAdvisorOptions.filter((advisor: any) =>
+          advisorOptions={advisorOptions.filter((advisor: any) =>
             advisor.name.toLowerCase().includes(form.advisorSearch.trim().toLowerCase()),
           )}
           onToggleClient={handleClientToggle}
@@ -100,8 +181,11 @@ export default function SchedulingPage() {
           onClose={() => {
             setIsModalOpen(false);
             setForm(createEmptySchedulingForm());
+            setSubmitError(null);
           }}
           onSubmit={handleSubmit}
+          isSubmitting={isSubmitting}
+          submitError={submitError}
         />
       )}
     </>

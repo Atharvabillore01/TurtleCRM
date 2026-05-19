@@ -17,7 +17,6 @@ from db.user_procs import (
     proc_create_advisor,
     proc_get_advisor_by_username,
 )
-from routes.transcript import router as transcript_router
 from logger import get_logger
 
 logger = get_logger("user-service")
@@ -61,9 +60,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-app.include_router(transcript_router)
-
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):

@@ -29,7 +29,7 @@ export function DashboardPage() {
 
           <button
             type="button"
-            onClick={() => navigate("/autofill")}
+            onClick={() => navigate("/dashboard/ai-validation")}
             className="w-full flex items-center justify-between border border-gray-100 rounded-xl px-5 py-4 hover:border-gray-300 hover:bg-gray-50 transition-colors text-left group"
           >
             <div>

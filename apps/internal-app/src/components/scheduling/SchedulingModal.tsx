@@ -12,6 +12,8 @@ export default function SchedulingModal({
   onToggleAdvisor,
   onAddGuest,
   onRemoveGuest,
+  isSubmitting,
+  submitError,
 }: any) {
   return (
     <div
@@ -169,6 +171,22 @@ export default function SchedulingModal({
             </select>
           </label>
 
+          <label className="col-span-2 grid gap-2 mobile:col-span-1">
+            <span className="text-xs font-extrabold text-muted uppercase">
+              Google Meet URL
+              <span className="ml-2 normal-case font-normal text-muted">
+                — paste the Meet link so Fireflies bot can auto-join and record
+              </span>
+            </span>
+            <input
+              className="form-field w-full min-h-[42px] px-3 py-[10px] border border-line rounded-[10px] outline-none bg-white transition-[border-color,box-shadow] duration-[160ms] ease-in"
+              type="url"
+              value={formValues.meetingUrl}
+              onChange={(event) => onChange("meetingUrl", event.target.value)}
+              placeholder="https://meet.google.com/xxx-yyyy-zzz"
+            />
+          </label>
+
           <div className="col-span-2 grid gap-2 mobile:col-span-1">
             <span className="text-xs font-extrabold text-muted uppercase">Guests (optional)</span>
             <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-[10px] mobile:grid-cols-1">
@@ -222,12 +240,16 @@ export default function SchedulingModal({
               Cancel
             </button>
             <button
-              className="min-h-10 px-4 border border-green rounded-lg bg-green text-ink font-black cursor-pointer"
+              className="min-h-10 px-4 border border-green rounded-lg bg-green text-ink font-black cursor-pointer disabled:opacity-50"
               type="submit"
+              disabled={!!isSubmitting}
             >
-              Add meeting
+              {isSubmitting ? "Scheduling…" : "Add meeting"}
             </button>
           </div>
+          {submitError && (
+            <p className="text-red-600 text-sm mt-2">{submitError}</p>
+          )}
         </form>
       </div>
     </div>

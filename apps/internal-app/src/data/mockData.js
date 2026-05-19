@@ -338,64 +338,6 @@ export const kcBookingClients = [
   { id: "KC-1004", name: "Samar Khanna", email: "samar.khanna@example.com", clientType: "NRI" },
 ];
 
-export const initialSchedulingRecords = [
-  {
-    id: "SCH-1001",
-    title: "Retirement Planning Review",
-    member: "Kavya",
-    advisor: "Aarav",
-    datetime: "06-05-2026 11:00 AM",
-    status: "Upcoming",
-  },
-  {
-    id: "SCH-1002",
-    title: "NRI Onboarding Call",
-    member: "Rohan",
-    advisor: "Nisha",
-    datetime: "10-05-2026 03:30 PM",
-    status: "Completed",
-  },
-  {
-    id: "SCH-1005",
-    title: "Daily Ops Handover",
-    member: "Sneha",
-    advisor: "Maya",
-    datetime: "14-05-2026 09:15 AM",
-    status: "Completed",
-  },
-  {
-    id: "SCH-1006",
-    title: "Insurance Planning Sync",
-    member: "Arjun",
-    advisor: "Aarav",
-    datetime: "18-05-2026 01:00 PM",
-    status: "Upcoming",
-  },
-  {
-    id: "SCH-1007",
-    title: "Wealth Review Reschedule",
-    member: "Isha",
-    advisor: "Nisha",
-    datetime: "22-05-2026 06:15 PM",
-    status: "Canceled",
-  },
-  {
-    id: "SCH-1003",
-    title: "Tax Planning Follow-up",
-    member: "Mira",
-    advisor: "Maya",
-    datetime: "08-05-2026 05:00 PM",
-    status: "Upcoming",
-  },
-  {
-    id: "SCH-1004",
-    title: "Kickoff Reschedule",
-    member: "Aditi",
-    advisor: "Aarav",
-    datetime: "02-05-2026 10:30 AM",
-    status: "Canceled",
-  },
-];
 
 export const initialAdvisors = [
   {
@@ -1089,21 +1031,6 @@ export const initialTasks = [
   },
 ];
 
-export const schedulingClientOptions = [
-  { id: "CLT-1001", name: "Raj Mehta" },
-  { id: "CLT-1002", name: "Ananya Sharma" },
-  { id: "CLT-1003", name: "Vikram Iyer" },
-  { id: "CLT-1004", name: "Ritika Sethi" },
-  { id: "CLT-1005", name: "Pooja Nair" },
-  { id: "CLT-1006", name: "Karan Malhotra" },
-];
-
-export const schedulingAdvisorOptions = [
-  { id: "ADV-1001", name: "Aarav" },
-  { id: "ADV-1002", name: "Maya" },
-  { id: "ADV-1003", name: "Nisha" },
-  { id: "ADV-1004", name: "Rohan" },
-];
 
 export function createEmptyLeadForm() {
   return leadFields.reduce((accumulator, field) => ({ ...accumulator, [field.id]: "" }), {});
@@ -1133,6 +1060,7 @@ export function createEmptySchedulingForm() {
     date: "",
     time: "",
     duration: "30",
+    meetingUrl: "",
     guestInput: "",
     guests: [],
     detailsHappened: "",

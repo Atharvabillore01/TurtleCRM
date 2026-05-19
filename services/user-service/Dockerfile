@@ -11,7 +11,6 @@ COPY services/user-service/config.py      .
 COPY services/user-service/eventbus.py    .
 COPY services/user-service/consumer.py    .
 COPY services/user-service/metrics.py     .
-COPY services/user-service/routes/        ./routes/
 COPY services/user-service/main.py        .
 
 EXPOSE 4002

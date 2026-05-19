@@ -132,7 +132,6 @@ services:
       FORCE_COLOR: "1"
       RABBITMQ_URL: amqp://turtle:${RABBITMQ_PASS:-changeme}@rabbitmq:5672
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
-      CRM_AI_SERVICE_URL: ${CRM_AI_SERVICE_URL:-http://localhost:5000}
     volumes:
       - ./logs/user-service:/app/logs
       - ./logs/combined:/app/logs/combined
@@ -180,6 +179,38 @@ services:
 
   # outbox-publisher: disabled — direct publish in outbox.py handles delivery in stub mode.
   # Re-enable when real sp_poll_unpublished_events proc + real DB are in place.
+
+  meeting-service:
+    build:
+      context: .
+      dockerfile: services/meeting-service/Dockerfile
+    restart: unless-stopped
+    stop_grace_period: 45s
+    ports:
+      - "4004:4004"
+    env_file: .env
+    environment:
+      FORCE_COLOR: "1"
+      RABBITMQ_URL: amqp://turtle:${RABBITMQ_PASS:-changeme}@rabbitmq:5672
+      MEETING_SERVICE_PORT: "4004"
+      FIREFLY_API_KEY: ${FIREFLY_API_KEY:-}
+      FIREFLY_WEBHOOK_SECRET: ${FIREFLY_WEBHOOK_SECRET:-}
+      CRM_AI_SERVICE_URL: ${CRM_AI_SERVICE_URL:-http://host.docker.internal:8090}
+      GOOGLE_SERVICE_ACCOUNT_FILE: ${GOOGLE_SERVICE_ACCOUNT_FILE:-}
+      GOOGLE_SERVICE_ACCOUNT_JSON: ${GOOGLE_SERVICE_ACCOUNT_JSON:-}
+      GOOGLE_CALENDAR_ID: ${GOOGLE_CALENDAR_ID:-primary}
+      GOOGLE_CALENDAR_TIMEZONE: ${GOOGLE_CALENDAR_TIMEZONE:-Asia/Kolkata}
+    volumes:
+      - ./logs/meeting-service:/app/logs
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4004/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   # ─── Frontend Apps ─────────────────────────────────────────────────────────
 
@@ -232,6 +263,7 @@ services:
       args:
         VITE_AUTH_SERVICE_URL: http://localhost:4000
         VITE_USER_SERVICE_URL: http://localhost:4002
+        VITE_MEETING_SERVICE_URL: http://localhost:4004
         VITE_SHOW_DEV_TOGGLE: ${VITE_SHOW_DEV_TOGGLE:-true}
     restart: unless-stopped
     ports:
