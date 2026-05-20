@@ -87,14 +87,28 @@ export default function SchedulingTable({ records, sortKey, sortDirection, onSor
               </td>
               <td>
                  <div className="flex items-center gap-1.5 flex-wrap">
-                  <button
-                    className="flex justify-center items-center min-w-[34px] min-h-[30px] border border-line rounded-lg bg-white text-ink transition-transform active:scale-95 cursor-pointer hover:bg-surface-soft"
-                    type="button"
-                    aria-label="Join meeting"
-                    title="Join meeting"
-                  >
-                    <HugeiconsIcon icon={ComputerVideoIcon} size={14} strokeWidth={2.5} />
-                  </button>
+                  {record.meetingUrl ? (
+                    <a
+                      className="flex justify-center items-center min-w-[34px] min-h-[30px] border border-line rounded-lg bg-white text-ink transition-transform active:scale-95 cursor-pointer hover:bg-surface-soft"
+                      href={record.meetingUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      aria-label="Join meeting"
+                      title={`Join: ${record.meetingUrl}`}
+                    >
+                      <HugeiconsIcon icon={ComputerVideoIcon} size={14} strokeWidth={2.5} />
+                    </a>
+                  ) : (
+                    <button
+                      className="flex justify-center items-center min-w-[34px] min-h-[30px] border border-line rounded-lg bg-white text-ink opacity-40 cursor-not-allowed"
+                      type="button"
+                      aria-label="No meeting URL"
+                      title="No meeting URL available"
+                      disabled
+                    >
+                      <HugeiconsIcon icon={ComputerVideoIcon} size={14} strokeWidth={2.5} />
+                    </button>
+                  )}
                   <button
                     className="flex justify-center items-center min-w-[34px] min-h-[30px] border border-line rounded-lg bg-white text-ink transition-transform active:scale-95 cursor-pointer hover:bg-surface-soft"
                     type="button"
