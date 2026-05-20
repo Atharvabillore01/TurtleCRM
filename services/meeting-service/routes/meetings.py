@@ -33,13 +33,19 @@ class ScheduleMeetingRequest(BaseModel):
     advisor_name: str = ""
     client_email: str = ""
     advisor_email: str = ""
+    # multi-advisor support — TODO: wire to DB proc columns when sp_schedule_meeting is ready
+    advisor_ids: list[str] = []
+    advisor_names: list[str] = []
+    advisor_emails: list[str] = []
     member: str = ""
     guests: list[str] = []
     notes: str = ""
 
     @property
     def attendee_emails(self) -> list[str]:
-        return [e for e in [self.client_email, self.advisor_email] if e]
+        # Use per-advisor emails if provided, otherwise fall back to single advisor_email
+        emails = self.advisor_emails if self.advisor_emails else ([self.advisor_email] if self.advisor_email else [])
+        return list({e for e in [self.client_email, *emails] if e})
 
 
 @router.get("/")
@@ -54,7 +60,7 @@ async def list_meetings():
 async def schedule_meeting(req: ScheduleMeetingRequest):
     meeting_id = await proc_schedule_meeting(
         client_id=req.client_id,
-        advisor_id=req.advisor_id,
+        advisor_id=req.advisor_ids[0] if req.advisor_ids else req.advisor_id,
         scheduled_at=req.scheduled_at,
         duration_minutes=req.duration_minutes,
         agenda=req.agenda,
@@ -62,6 +68,8 @@ async def schedule_meeting(req: ScheduleMeetingRequest):
         title=req.title or req.agenda,
         client_name=req.client_name,
         advisor_name=req.advisor_name,
+        advisor_ids=req.advisor_ids or ([req.advisor_id] if req.advisor_id else []),
+        advisor_names=req.advisor_names or ([req.advisor_name] if req.advisor_name else []),
         member=req.member,
         guests=req.guests,
         notes=req.notes,
@@ -110,7 +118,8 @@ async def schedule_meeting(req: ScheduleMeetingRequest):
     await publish_event("meeting.scheduled", {
         "meeting_id": meeting_id,
         "client_id": req.client_id,
-        "advisor_id": req.advisor_id,
+        "advisor_id": req.advisor_ids[0] if req.advisor_ids else req.advisor_id,
+        "advisor_ids": req.advisor_ids or ([req.advisor_id] if req.advisor_id else []),
         "scheduled_at": req.scheduled_at,
         "agenda": req.agenda,
         "timestamp": datetime.now(timezone.utc).isoformat(),

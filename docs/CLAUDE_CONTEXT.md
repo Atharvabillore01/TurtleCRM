@@ -208,6 +208,82 @@ OTP_PROVIDER=mock                               # switch to twilio when ready
 
 ---
 
+## Changes — session 2026-05-20
+
+### multi-advisor + name sync + join button
+
+**`services/meeting-service/db/meeting_procs.py`**
+- Added `advisor_ids: list` and `advisor_names: list` fields to `MeetingRow`
+- Moved `_STUB_CLIENTS` / `_STUB_ADVISORS` above the proc handlers (they were below, causing reference errors)
+- Added `_resolve_client_name(client_id, provided)` and `_resolve_advisor_name(advisor_id, provided)` — look up display names from stubs when not stored on the meeting row; prevents raw IDs showing in the table
+- Updated `_sp_schedule_meeting` to accept `advisor_ids` / `advisor_names` lists; resolves all names via stubs; joins them with `" & "` for `advisor_name` display field
+- Updated `_fn_list_meetings` to return `advisor_ids` / `advisor_names` and use resolver fallback for both client and advisor names
+- Fixed seed data: seeded meeting now has `client_name="Priya Kapoor"`, `advisor_name="Anil Mehta"`, `advisor_id="advisor_1"`, `title`, `member` all set — was showing raw IDs before
+
+**`services/meeting-service/routes/meetings.py`**
+- Added `advisor_ids: list[str]`, `advisor_names: list[str]`, `advisor_emails: list[str]` to `ScheduleMeetingRequest`
+- `attendee_emails` property now fans out all advisor emails for Google Calendar invites
+- Passes `advisor_ids` / `advisor_names` to proc and to the `meeting.scheduled` event payload
+
+**`apps/internal-app/src/api/meetingApi.ts`**
+- Added `advisor_ids`, `advisor_names`, `advisor_emails` to `ScheduleMeetingPayload`
+- Added `advisor_ids`, `advisor_names` to `MeetingRecord`
+
+**`apps/internal-app/src/routes/SchedulingPage.tsx`**
+- `meetingRecordToRow` reads `m.advisor_names` and joins with `" & "` for display; no more raw IDs in table
+- `handleSubmit` now uses all `selectedAdvisors` (not just `[0]`); passes `advisor_ids`, `advisor_names`, `advisor_emails` arrays to `scheduleMeeting`
+
+**`apps/internal-app/src/components/scheduling/SchedulingTable.tsx`**
+- Join meeting (camera) button: renders as `<a target="_blank">` opening `meetingUrl`; shows disabled/greyed when no URL available
+
+---
+
+## Full event + worker flow (confirmed working in code)
+
+```
+Schedule click
+  → proc: sp_schedule_meeting (saves with client_name, advisor_names[])
+  → Google Calendar API → meet_url  (if GOOGLE_SERVICE_ACCOUNT_FILE set)
+  → Fireflies addToLiveMeeting(meet_url) → firefly_meeting_id
+  → proc: sp_update_meeting_firefly_id
+  → event: meeting.scheduled
+
+Meeting ends → Fireflies webhook POST /webhooks/firefly
+  → proc: sp_save_transcript(meeting_id)
+  → event: meeting.transcribed
+
+transcript_processor consumes meeting.transcribed
+  → proc: fn_get_meeting_for_extraction(meeting_id)
+        returns: client_id + agents_to_use (derived from agenda text)
+  → POST CRM_AI_SERVICE_URL/extract  { transcript, context: { agents_to_use } }
+        returns: 174 filled fields
+  → proc: sp_save_extraction
+  → events (3, parallel): extraction.completed + extraction.save + extraction.summarize
+
+data_persistence consumes extraction.save
+  → procs: sp_save_demographics (fields 1-42)
+           sp_save_financials   (fields 43-78)
+           sp_save_goals        (fields 79-83)
+           sp_save_qualitative  (fields 144-158)
+
+summary_worker consumes extraction.summarize
+  → POST CRM_AI_SERVICE_URL/summarize  { transcript, extraction: 174 fields }
+  → proc: sp_save_summary + sp_save_action_item (up to 10)
+  → event: meeting.summarized
+```
+
+**Agent selection (fn_get_meeting_for_extraction):**
+| agenda keyword | agents_to_use |
+|---|---|
+| "initial" | DemographicsAgent, FinanceAgent, GoalsAgent, ProfessionalAgent, QualitativeAgent, SystemResolver |
+| "review" | FinanceAgent, GoalsAgent, TaskAgent, FeedbackAgent, SystemResolver |
+| "goal" | GoalsAgent, FinanceAgent, ScheduleAgent, TaskAgent, SystemResolver |
+
+**Known stub bypass to fix when switching to real DB:**
+`transcript_processor.py:31` — directly imports `_meetings` dict to look up by `firefly_meeting_id`. Needs to become a proc call `fn_get_meeting_by_firefly_id` when real DB is wired.
+
+---
+
 ## Pending / next tasks
 
 - [ ] **Google Calendar service account** — user needs to set up (see setup above)
@@ -216,8 +292,7 @@ OTP_PROVIDER=mock                               # switch to twilio when ready
   - `http://localhost:4000/auth/oauth/internal/google/callback`
 - [ ] **Real DB procs** — backend team will deliver stored procs; uncomment real DB calls in proc stubs when ready
 - [ ] **OTP provider** — switch `OTP_PROVIDER` from `mock` to `twilio` once Twilio creds are ready
-- [ ] **Advisor name resolution** — the scheduling table shows advisor_id if advisor_name not resolved from proc; fix by passing name from stub
-- [ ] **Join meeting button** — the camera icon in SchedulingTable should open `meetingUrl` in a new tab
+- [ ] **transcript_processor.py:31** — replace direct `_meetings` import with a `fn_get_meeting_by_firefly_id` proc when DB is ready
 
 ---
 
@@ -239,6 +314,7 @@ cd apps/internal-app && npm run dev
 ---
 
 ## Commit history (recent)
+- `540b15d` docs: add CLAUDE_CONTEXT.md — context file for continuing in new Claude sessions
 - `a020aa9` feat: meeting-service — full pipeline, scheduling from DB procs, Google Meet + Fireflies
 - `579a8a7` fix: wire /metrics on otp-service and user-service
 - `469adca` fix: full stack running — outbox direct publish, pretty logger, all Dockerfiles, observability

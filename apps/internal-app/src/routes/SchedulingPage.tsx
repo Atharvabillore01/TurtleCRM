@@ -20,13 +20,19 @@ function meetingRecordToRow(m: any) {
     transcribed: "Completed",
     extraction_completed: "Completed",
   };
+  const advisorDisplay = (m.advisor_names && m.advisor_names.length > 0)
+    ? m.advisor_names.join(" & ")
+    : (m.advisor_name || m.advisor_id);
+
   return {
     id: m.id,
     title: m.title || m.agenda,
     clientNames: m.client_name || m.client_id,
     bookedBy: m.member || m.created_by || "",
     member: m.member || m.created_by || "—",
-    advisor: m.advisor_name || m.advisor_id,
+    advisor: advisorDisplay,
+    advisorIds: m.advisor_ids || [m.advisor_id],
+    advisorNames: m.advisor_names || [m.advisor_name || m.advisor_id],
     guests: m.guests || [],
     notes: m.notes || "",
     duration: m.duration_minutes,
@@ -71,20 +77,21 @@ export default function SchedulingPage() {
     setSubmitError(null);
 
     const client = form.selectedClients[0];
-    const advisor = form.selectedAdvisors[0];
+    const advisors: any[] = form.selectedAdvisors;
 
-    if (!client || !advisor) {
+    if (!client || advisors.length === 0) {
       setSubmitError("Please select at least one client and one advisor.");
       setIsSubmitting(false);
       return;
     }
 
+    const primaryAdvisor = advisors[0];
     const scheduledAt = buildDateTime(form.date, form.time);
 
     try {
       const result = await scheduleMeeting({
         client_id: client.id,
-        advisor_id: advisor.id,
+        advisor_id: primaryAdvisor.id,
         scheduled_at: scheduledAt,
         duration_minutes: parseInt(form.duration ?? "60", 10),
         agenda: form.agenda || form.title || "",
@@ -92,9 +99,12 @@ export default function SchedulingPage() {
         created_by: form.bookedBy || "internal-app",
         title: form.title || form.agenda || "",
         client_name: client.name,
-        advisor_name: advisor.name,
+        advisor_name: advisors.map((a: any) => a.name).join(" & "),
         client_email: client.email || "",
-        advisor_email: advisor.email || "",
+        advisor_email: primaryAdvisor.email || "",
+        advisor_ids: advisors.map((a: any) => a.id),
+        advisor_names: advisors.map((a: any) => a.name),
+        advisor_emails: advisors.map((a: any) => a.email || "").filter(Boolean),
         member: form.member || form.bookedBy || "",
         guests: form.guests || [],
         notes: form.detailsHappened || "",

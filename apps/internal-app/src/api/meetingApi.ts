@@ -36,6 +36,8 @@ export interface MeetingRecord {
   client_name: string;
   advisor_id: string;
   advisor_name: string;
+  advisor_ids: string[];
+  advisor_names: string[];
   member: string;
   guests: string[];
   notes: string;
@@ -82,6 +84,10 @@ export interface ScheduleMeetingPayload {
   advisor_name: string;
   client_email: string;
   advisor_email: string;
+  // multi-advisor fields
+  advisor_ids: string[];
+  advisor_names: string[];
+  advisor_emails: string[];
   member: string;
   guests: string[];
   notes: string;

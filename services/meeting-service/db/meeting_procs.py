@@ -31,6 +31,9 @@ class MeetingRow:
     title: Optional[str] = None
     client_name: Optional[str] = None
     advisor_name: Optional[str] = None
+    # multi-advisor support (TODO: map to DB proc columns when ready)
+    advisor_ids: list = field(default_factory=list)
+    advisor_names: list = field(default_factory=list)
     member: Optional[str] = None          # ops team member who booked
     guests: list = field(default_factory=list)
     notes: Optional[str] = None           # detailsHappened / extra notes
@@ -299,10 +302,17 @@ def _seed_dummy_data() -> None:
     _meetings[meeting_id] = MeetingRow(
         id=meeting_id,
         client_id="client_2",
-        advisor_id="advisor-seed-001",
+        advisor_id="advisor_1",
+        advisor_ids=["advisor_1"],
+        advisor_names=["Anil Mehta"],
         scheduled_at="2026-04-25T10:00:00Z",
         duration_minutes=90,
         agenda="Initial Consultation — Financial Planning",
+        title="Initial Consultation — Financial Planning",
+        client_name="Priya Kapoor",
+        advisor_name="Anil Mehta",
+        member="Ops Team",
+        created_by="system-seed",
         status="extraction_completed",
         firefly_meeting_id="firefly-seed-001",
         transcript_text="[Sample transcript — seeded data]",
@@ -352,7 +362,39 @@ def _seed_dummy_data() -> None:
     )
 
 
+# ── Stub reference data (replace with real proc lookups when DB is ready) ────
+
+_STUB_CLIENTS = [
+    {"id": "client_1", "name": "Rahul Sharma", "email": "atharvabillore001@gmail.com", "segment": "HNI"},
+    {"id": "client_2", "name": "Priya Kapoor", "email": "atharvabillore001@gmail.com", "segment": "Mass Affluent"},
+    {"id": "client_3", "name": "Amit Verma", "email": "atharvabillore001@gmail.com", "segment": "Ultra HNI"},
+    {"id": "client_4", "name": "Sneha Patel", "email": "atharvabillore001@gmail.com", "segment": "HNI"},
+    {"id": "client_5", "name": "Vikram Singh", "email": "atharvabillore001@gmail.com", "segment": "Mass Affluent"},
+]
+
+_STUB_ADVISORS = [
+    {"id": "advisor_1", "name": "Anil Mehta", "email": "atharvabillore007@gmail.com", "specialization": "Financial Planning"},
+    {"id": "advisor_2", "name": "Deepa Nair", "email": "atharvabillore007@gmail.com", "specialization": "Tax Advisory"},
+    {"id": "advisor_3", "name": "Rohit Joshi", "email": "atharvabillore007@gmail.com", "specialization": "Estate Planning"},
+    {"id": "advisor_4", "name": "Kavita Rao", "email": "atharvabillore007@gmail.com", "specialization": "Insurance"},
+]
+
+
 # ── Proc handlers ─────────────────────────────────────────────────────────────
+
+def _resolve_client_name(client_id: str, provided: str | None) -> str:
+    if provided:
+        return provided
+    match = next((c for c in _STUB_CLIENTS if c["id"] == client_id), None)
+    return match["name"] if match else client_id
+
+
+def _resolve_advisor_name(advisor_id: str, provided: str | None) -> str:
+    if provided:
+        return provided
+    match = next((a for a in _STUB_ADVISORS if a["id"] == advisor_id), None)
+    return match["name"] if match else advisor_id
+
 
 async def _sp_schedule_meeting(
     client_id: str,
@@ -364,6 +406,9 @@ async def _sp_schedule_meeting(
     title: str | None = None,
     client_name: str | None = None,
     advisor_name: str | None = None,
+    # multi-advisor fields — TODO: map to DB proc columns when sp_schedule_meeting is ready
+    advisor_ids: list | None = None,
+    advisor_names: list | None = None,
     member: str | None = None,
     guests: list | None = None,
     notes: str | None = None,
@@ -374,17 +419,32 @@ async def _sp_schedule_meeting(
     #     row = await conn.fetchrow("CALL sp_schedule_meeting($1,$2,...)", ...)
     #     return ProcResult(result=row["meeting_id"], nextAction="create_firefly_meeting")
     meeting_id = str(uuid.uuid4())
+
+    # Normalise multi-advisor lists — fall back to single advisor_id/name when not provided
+    resolved_ids: list = advisor_ids if advisor_ids else [advisor_id]
+    resolved_names: list = (
+        advisor_names if advisor_names
+        else [_resolve_advisor_name(advisor_id, advisor_name)]
+    )
+    # Ensure every ID has a resolved name (look up stubs for any that are missing)
+    if len(resolved_names) < len(resolved_ids):
+        resolved_names = [_resolve_advisor_name(aid, None) for aid in resolved_ids]
+
+    display_advisor_name = " & ".join(resolved_names) if resolved_names else _resolve_advisor_name(advisor_id, advisor_name)
+
     _meetings[meeting_id] = MeetingRow(
         id=meeting_id,
         client_id=client_id,
-        advisor_id=advisor_id,
+        advisor_id=resolved_ids[0],
+        advisor_ids=resolved_ids,
+        advisor_names=resolved_names,
         scheduled_at=scheduled_at,
         duration_minutes=duration_minutes,
         agenda=agenda,
         status="scheduled",
         title=title or agenda,
-        client_name=client_name,
-        advisor_name=advisor_name,
+        client_name=_resolve_client_name(client_id, client_name),
+        advisor_name=display_advisor_name,
         member=member,
         guests=guests or [],
         notes=notes,
@@ -602,22 +662,6 @@ async def _fn_get_extraction(extraction_id: str) -> ProcResult:
     return ProcResult(result=extraction)
 
 
-_STUB_CLIENTS = [
-    {"id": "client_1", "name": "Rahul Sharma", "email": "atharvabillore001@gmail.com", "segment": "HNI"},
-    {"id": "client_2", "name": "Priya Kapoor", "email": "atharvabillore001@gmail.com", "segment": "Mass Affluent"},
-    {"id": "client_3", "name": "Amit Verma", "email": "atharvabillore001@gmail.com", "segment": "Ultra HNI"},
-    {"id": "client_4", "name": "Sneha Patel", "email": "atharvabillore001@gmail.com", "segment": "HNI"},
-    {"id": "client_5", "name": "Vikram Singh", "email": "atharvabillore001@gmail.com", "segment": "Mass Affluent"},
-]
-
-_STUB_ADVISORS = [
-    {"id": "advisor_1", "name": "Anil Mehta", "email": "atharvabillore007@gmail.com", "specialization": "Financial Planning"},
-    {"id": "advisor_2", "name": "Deepa Nair", "email": "atharvabillore007@gmail.com", "specialization": "Tax Advisory"},
-    {"id": "advisor_3", "name": "Rohit Joshi", "email": "atharvabillore007@gmail.com", "specialization": "Estate Planning"},
-    {"id": "advisor_4", "name": "Kavita Rao", "email": "atharvabillore007@gmail.com", "specialization": "Insurance"},
-]
-
-
 async def _fn_list_meetings() -> ProcResult:
     # TODO: uncomment when sp_list_meetings proc is ready
     # async with get_db_pool().acquire() as conn:
@@ -629,9 +673,11 @@ async def _fn_list_meetings() -> ProcResult:
             "title": m.title or m.agenda,
             "agenda": m.agenda,
             "client_id": m.client_id,
-            "client_name": m.client_name or m.client_id,
+            "client_name": _resolve_client_name(m.client_id, m.client_name),
             "advisor_id": m.advisor_id,
-            "advisor_name": m.advisor_name or m.advisor_id,
+            "advisor_name": m.advisor_name or _resolve_advisor_name(m.advisor_id, None),
+            "advisor_ids": m.advisor_ids or [m.advisor_id],
+            "advisor_names": m.advisor_names or [_resolve_advisor_name(m.advisor_id, None)],
             "member": m.member or m.created_by or "—",
             "guests": m.guests or [],
             "notes": m.notes or "",
