@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
@@ -8,6 +9,8 @@ from fastapi.responses import RedirectResponse
 from eventbus import publish_event
 from config import settings
 from auth_utils import issue_tokens, set_token_cookies
+from db.team_procs import proc_is_internal_user_allowed
+from redis_client import get_redis
 from logger import get_logger
 
 router = APIRouter(prefix="/auth/oauth", tags=["oauth"])
@@ -96,7 +99,7 @@ async def internal_google_redirect():
         "client_id": settings.google_client_id,
         "redirect_uri": settings.google_internal_callback_url,
         "response_type": "code",
-        "scope": "openid email profile",
+        "scope": "openid email profile https://www.googleapis.com/auth/calendar.events",
         "access_type": "offline",
         "prompt": "consent",
     })
@@ -139,7 +142,25 @@ async def internal_google_callback(request: Request, code: str | None = None, er
 
         profile = profile_resp.json()
 
+    # Check allowlist via DB proc
+    email = (profile.get("email") or "").lower()
+    if not await proc_is_internal_user_allowed(email):
+        logger.warning("oauth_access_denied", extra={"email": email, "app": "internal", "ip": ip})
+        return RedirectResponse(f"{settings.internal_app_url}/auth/error?reason=not_authorised")
+
     user_id = f"google:{profile['sub']}"
+
+    # Store Google OAuth tokens in Redis so meeting-service can create Calendar events
+    redis = get_redis()
+    await redis.setex(
+        f"google_cal_token:{user_id}",
+        60 * 24 * 3600,
+        json.dumps({
+            "access_token": token_data["access_token"],
+            "refresh_token": token_data.get("refresh_token"),
+        }),
+    )
+
     access_token, refresh_token, session_id = await issue_tokens(user_id, "internal", "internal")
 
     await publish_event("auth.login.success", {
