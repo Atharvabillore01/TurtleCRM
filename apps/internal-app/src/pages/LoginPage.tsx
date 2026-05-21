@@ -1,7 +1,23 @@
-import { TurtleLogo } from "@turtle/ui";
+import { Navigate } from "react-router-dom";
+import { TurtleLogo, LoadingSpinner } from "@turtle/ui";
 import { GoogleOAuthButton } from "../components/GoogleOAuthButton.js";
+import { useAuth } from "../hooks/useAuth.js";
 
 export function LoginPage() {
+  const { isAuthenticated, isLoading } = useAuth();
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-gray-900 via-gray-800 to-brand-900">
+        <LoadingSpinner size={32} label="" />
+      </div>
+    );
+  }
+
+  if (isAuthenticated) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-900 via-gray-800 to-brand-900 flex items-center justify-center px-4">
       <div className="w-full max-w-sm">

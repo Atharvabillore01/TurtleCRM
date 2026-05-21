@@ -53,7 +53,7 @@ export function OAuthCallbackPage() {
             <ErrorMessage message={error} />
             <button
               type="button"
-              onClick={() => navigate("/")}
+              onClick={() => navigate("/login")}
               className="mt-4 text-sm text-brand-700 hover:underline"
             >
               ← Back to sign in

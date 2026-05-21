@@ -3,7 +3,10 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel
 
+import json as _json
+
 from config import settings
+from redis_client import get_redis
 from db.meeting_procs import (
     proc_cancel_meeting,
     proc_list_meetings,
@@ -77,18 +80,34 @@ async def schedule_meeting(req: ScheduleMeetingRequest):
     )
 
     # ── Step 1: auto-create Google Meet + send calendar invites ─────────────────
-    meet_url = req.meeting_url  # fallback if Calendar API is not configured
+    meet_url = req.meeting_url  # fallback if no Google token available
     google_event_id = ""
-    if settings.google_service_account_file or settings.google_service_account_json:
+
+    # Fetch the scheduling user's stored Google OAuth token from Redis
+    google_access_token = None
+    google_refresh_token = None
+    if req.created_by:
         try:
-                cal_result = await create_meet_event(
+            raw = await get_redis().get(f"google_cal_token:{req.created_by}")
+            if raw:
+                tok = _json.loads(raw)
+                google_access_token = tok.get("access_token")
+                google_refresh_token = tok.get("refresh_token")
+        except Exception as exc:
+            logger.warning("redis_token_fetch_failed", extra={"error": str(exc), "created_by": req.created_by})
+
+    if google_access_token:
+        try:
+            cal_result = await create_meet_event(
                 settings=settings,
                 title=req.title or req.agenda,
                 agenda=req.agenda,
                 scheduled_at=req.scheduled_at,
                 duration_minutes=req.duration_minutes,
-                attendee_emails=req.attendee_emails,  # client + advisor emails
+                attendee_emails=req.attendee_emails,
                 timezone=settings.google_calendar_timezone,
+                google_access_token=google_access_token,
+                google_refresh_token=google_refresh_token,
             )
             meet_url = cal_result["meet_url"] or meet_url
             google_event_id = cal_result["event_id"]
@@ -118,10 +137,17 @@ async def schedule_meeting(req: ScheduleMeetingRequest):
     await publish_event("meeting.scheduled", {
         "meeting_id": meeting_id,
         "client_id": req.client_id,
+        "client_name": req.client_name,
+        "client_email": req.client_email,
         "advisor_id": req.advisor_ids[0] if req.advisor_ids else req.advisor_id,
         "advisor_ids": req.advisor_ids or ([req.advisor_id] if req.advisor_id else []),
+        "advisor_names": req.advisor_names or ([req.advisor_name] if req.advisor_name else []),
+        "advisor_emails": req.advisor_emails or ([req.advisor_email] if req.advisor_email else []),
         "scheduled_at": req.scheduled_at,
+        "duration_minutes": req.duration_minutes,
+        "title": req.title or req.agenda,
         "agenda": req.agenda,
+        "meet_url": meet_url,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
 

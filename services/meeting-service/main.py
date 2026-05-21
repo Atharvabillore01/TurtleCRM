@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from db.meeting_procs import register_meeting_procs
 from eventbus import disconnect_publisher
+from redis_client import close_redis
 from logger import get_logger
 from metrics import metrics_endpoint, metrics_middleware
 from routes.clients import router as clients_router
@@ -41,7 +42,7 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
 
-    await disconnect_publisher()
+    await asyncio.gather(disconnect_publisher(), close_redis(), return_exceptions=True)
     logger.info("meeting_service_stopped")
 
 

@@ -8,10 +8,14 @@ class Settings(BaseSettings):
     meeting_service_port: int = 4004
 
     rabbitmq_url: str = "amqp://turtle:changeme@localhost:5672"
+    redis_url: str = "redis://localhost:6379"
     crm_ai_service_url: str = "http://localhost:5000"
 
     firefly_api_key: str = ""
     firefly_webhook_secret: str = ""
+
+    google_client_id: str = ""
+    google_client_secret: str = ""
 
     # Google Calendar — path to service account JSON key file
     # OR set GOOGLE_SERVICE_ACCOUNT_JSON to the raw JSON string

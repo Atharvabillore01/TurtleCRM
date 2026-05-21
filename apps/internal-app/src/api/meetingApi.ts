@@ -77,7 +77,7 @@ export interface ScheduleMeetingPayload {
   scheduled_at: string;
   duration_minutes: number;
   agenda: string;
-  meeting_url: string;
+  meeting_url?: string;
   created_by: string;
   title: string;
   client_name: string;

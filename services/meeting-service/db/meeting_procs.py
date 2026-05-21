@@ -365,11 +365,11 @@ def _seed_dummy_data() -> None:
 # ── Stub reference data (replace with real proc lookups when DB is ready) ────
 
 _STUB_CLIENTS = [
-    {"id": "client_1", "name": "Rahul Sharma", "email": "atharvabillore001@gmail.com", "segment": "HNI"},
-    {"id": "client_2", "name": "Priya Kapoor", "email": "atharvabillore001@gmail.com", "segment": "Mass Affluent"},
-    {"id": "client_3", "name": "Amit Verma", "email": "atharvabillore001@gmail.com", "segment": "Ultra HNI"},
-    {"id": "client_4", "name": "Sneha Patel", "email": "atharvabillore001@gmail.com", "segment": "HNI"},
-    {"id": "client_5", "name": "Vikram Singh", "email": "atharvabillore001@gmail.com", "segment": "Mass Affluent"},
+    {"id": "client_1", "name": "Rahul Sharma", "email": "atharvabillore57@gmail.com", "segment": "HNI"},
+    {"id": "client_2", "name": "Priya Kapoor", "email": "atharvabillore57@gmail.com", "segment": "Mass Affluent"},
+    {"id": "client_3", "name": "Amit Verma", "email": "atharvabillore57@gmail.com", "segment": "Ultra HNI"},
+    {"id": "client_4", "name": "Sneha Patel", "email": "atharvabillore57@gmail.com", "segment": "HNI"},
+    {"id": "client_5", "name": "Vikram Singh", "email": "atharvabillore57@gmail.com", "segment": "Mass Affluent"},
 ]
 
 _STUB_ADVISORS = [

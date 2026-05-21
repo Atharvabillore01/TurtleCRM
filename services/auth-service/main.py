@@ -16,6 +16,7 @@ from routes.oauth import router as oauth_router
 from routes.refresh import router as refresh_router
 from logger import get_logger
 from db.outbox_procs import register_outbox_mocks
+from db.team_procs import register_team_mocks
 
 logger = get_logger("auth-service")
 
@@ -23,6 +24,7 @@ logger = get_logger("auth-service")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     register_outbox_mocks()
+    register_team_mocks()
     logger.info("auth-service starting up", extra={"env": settings.node_env})
     await _get_exchange()
     logger.info("rabbitmq publisher connected")

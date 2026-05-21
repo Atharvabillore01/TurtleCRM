@@ -192,10 +192,13 @@ services:
     environment:
       FORCE_COLOR: "1"
       RABBITMQ_URL: amqp://turtle:${RABBITMQ_PASS:-changeme}@rabbitmq:5672
+      REDIS_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379
       MEETING_SERVICE_PORT: "4004"
       FIREFLY_API_KEY: ${FIREFLY_API_KEY:-}
       FIREFLY_WEBHOOK_SECRET: ${FIREFLY_WEBHOOK_SECRET:-}
       CRM_AI_SERVICE_URL: ${CRM_AI_SERVICE_URL:-http://host.docker.internal:8090}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_SERVICE_ACCOUNT_FILE: ${GOOGLE_SERVICE_ACCOUNT_FILE:-}
       GOOGLE_SERVICE_ACCOUNT_JSON: ${GOOGLE_SERVICE_ACCOUNT_JSON:-}
       GOOGLE_CALENDAR_ID: ${GOOGLE_CALENDAR_ID:-primary}
@@ -204,6 +207,8 @@ services:
       - ./logs/meeting-service:/app/logs
     depends_on:
       rabbitmq:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4004/health')\""]

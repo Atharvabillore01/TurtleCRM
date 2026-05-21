@@ -1,10 +1,17 @@
-import { Outlet } from "react-router-dom";
-// import { Navigate } from "react-router-dom";
-// import { useAuth } from "../hooks/useAuth.js";
+import { Outlet, Navigate } from "react-router-dom";
+import { useAuth } from "../hooks/useAuth.js";
+import { LoadingSpinner } from "@turtle/ui";
 
 export function ProtectedRoute() {
-  // AUTH DISABLED FOR FRONTEND DEVELOPMENT
-  // const { isAuthenticated } = useAuth();
-  // return isAuthenticated ? <Outlet /> : <Navigate to="/" replace />;
-  return <Outlet />;
+  const { isAuthenticated, isLoading } = useAuth();
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <LoadingSpinner size={32} label="" />
+      </div>
+    );
+  }
+
+  return isAuthenticated ? <Outlet /> : <Navigate to="/login" replace />;
 }

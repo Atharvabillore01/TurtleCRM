@@ -4,6 +4,7 @@ import SchedulingModal from "../components/scheduling/SchedulingModal";
 import { createEmptySchedulingForm } from "../data/mockData";
 import { buildDateTime } from "../utils/dateTime";
 import { fetchClients, fetchAdvisors, fetchMeetings, scheduleMeeting } from "../api/meetingApi";
+import { useAuth } from "../hooks/useAuth.js";
 
 function meetingRecordToRow(m: any) {
   const dt = new Date(m.scheduled_at);
@@ -44,6 +45,7 @@ function meetingRecordToRow(m: any) {
 }
 
 export default function SchedulingPage() {
+  const { userId } = useAuth();
   const [records, setRecords] = useState<any[]>([]);
   const [search, setSearch] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -95,8 +97,7 @@ export default function SchedulingPage() {
         scheduled_at: scheduledAt,
         duration_minutes: parseInt(form.duration ?? "60", 10),
         agenda: form.agenda || form.title || "",
-        meeting_url: form.meetingUrl || "",
-        created_by: form.bookedBy || "internal-app",
+        created_by: userId || form.bookedBy || "internal-app",
         title: form.title || form.agenda || "",
         client_name: client.name,
         advisor_name: advisors.map((a: any) => a.name).join(" & "),

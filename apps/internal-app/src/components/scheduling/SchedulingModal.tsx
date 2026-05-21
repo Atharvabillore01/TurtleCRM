@@ -171,21 +171,6 @@ export default function SchedulingModal({
             </select>
           </label>
 
-          <label className="col-span-2 grid gap-2 mobile:col-span-1">
-            <span className="text-xs font-extrabold text-muted uppercase">
-              Google Meet URL
-              <span className="ml-2 normal-case font-normal text-muted">
-                — paste the Meet link so Fireflies bot can auto-join and record
-              </span>
-            </span>
-            <input
-              className="form-field w-full min-h-[42px] px-3 py-[10px] border border-line rounded-[10px] outline-none bg-white transition-[border-color,box-shadow] duration-[160ms] ease-in"
-              type="url"
-              value={formValues.meetingUrl}
-              onChange={(event) => onChange("meetingUrl", event.target.value)}
-              placeholder="https://meet.google.com/xxx-yyyy-zzz"
-            />
-          </label>
 
           <div className="col-span-2 grid gap-2 mobile:col-span-1">
             <span className="text-xs font-extrabold text-muted uppercase">Guests (optional)</span>
