@@ -35,19 +35,14 @@ class FireflyClient:
 
     async def add_to_meeting(self, meeting_url: str, title: str, scheduled_at: str) -> dict:
         """
-        Invite the Fireflies bot to a meeting URL so it records automatically.
-        Returns { meeting_id, bot_id }.
+        Invite the Fireflies bot to record a meeting.
+        Fireflies only supports addToLiveMeeting (no future-scheduling API exists).
+        Returns { firefly_meeting_id, firefly_meeting_url }.
         """
         query = """
-        mutation AddToLiveMeeting($url: String!, $title: String!, $scheduledAt: String) {
-          addToLiveMeeting(
-            url: $url
-            title: $title
-            scheduled_at: $scheduledAt
-          ) {
-            id
-            title
-            organizer_email
+        mutation AddToLiveMeeting($meetingLink: String!, $title: String) {
+          addToLiveMeeting(meeting_link: $meetingLink, title: $title) {
+            success
           }
         }
         """
@@ -58,18 +53,21 @@ class FireflyClient:
                 json={
                     "query": query,
                     "variables": {
-                        "url": meeting_url,
+                        "meetingLink": meeting_url,
                         "title": title,
-                        "scheduledAt": scheduled_at,
                     },
                 },
             )
-            resp.raise_for_status()
+            if not resp.is_success:
+                logger.error("firefly_http_error", extra={"status": resp.status_code, "body": resp.text})
+                resp.raise_for_status()
             data = resp.json()
             if "errors" in data:
                 raise RuntimeError(f"Firefly API error: {data['errors']}")
-            meeting = data["data"]["addToLiveMeeting"]
-            return {"firefly_meeting_id": meeting["id"], "firefly_meeting_url": meeting_url}
+            if not data.get("data", {}).get("addToLiveMeeting", {}).get("success"):
+                raise RuntimeError("Firefly addToLiveMeeting returned success=false")
+            logger.info("firefly_bot_added", extra={"meeting_url": meeting_url, "title": title})
+            return {"firefly_meeting_id": meeting_url, "firefly_meeting_url": meeting_url}
 
     async def get_transcript(self, firefly_meeting_id: str) -> str:
         """Fetch the full transcript text for a completed meeting."""

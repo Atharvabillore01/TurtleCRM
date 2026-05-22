@@ -196,15 +196,17 @@ services:
       MEETING_SERVICE_PORT: "4004"
       FIREFLY_API_KEY: ${FIREFLY_API_KEY:-}
       FIREFLY_WEBHOOK_SECRET: ${FIREFLY_WEBHOOK_SECRET:-}
+      FIREFLY_BOT_EMAIL: ${FIREFLY_BOT_EMAIL:-}
       CRM_AI_SERVICE_URL: ${CRM_AI_SERVICE_URL:-http://host.docker.internal:8090}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
-      GOOGLE_SERVICE_ACCOUNT_FILE: ${GOOGLE_SERVICE_ACCOUNT_FILE:-}
-      GOOGLE_SERVICE_ACCOUNT_JSON: ${GOOGLE_SERVICE_ACCOUNT_JSON:-}
+      GOOGLE_SERVICE_ACCOUNT_FILE: /app/secrets/gcp-sa.json
+      GOOGLE_SERVICE_ACCOUNT_JSON: ""
       GOOGLE_CALENDAR_ID: ${GOOGLE_CALENDAR_ID:-primary}
       GOOGLE_CALENDAR_TIMEZONE: ${GOOGLE_CALENDAR_TIMEZONE:-Asia/Kolkata}
     volumes:
       - ./logs/meeting-service:/app/logs
+      - ./secrets/gcp-sa.json:/app/secrets/gcp-sa.json:ro
     depends_on:
       rabbitmq:
         condition: service_healthy

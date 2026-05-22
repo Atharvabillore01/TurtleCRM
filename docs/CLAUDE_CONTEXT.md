@@ -159,26 +159,38 @@ member, guests, notes
 
 ## Google Meet + Fireflies setup
 
-### What's needed to fully activate
-1. Google Cloud Console → enable **Google Calendar API**
-2. Create service account → download JSON key
-3. Share your Google Calendar with the service account email
-4. Set in `.env`:
-   ```
-   GOOGLE_SERVICE_ACCOUNT_FILE=/path/to/key.json
-   GOOGLE_CALENDAR_ID=primary
-   GOOGLE_CALENDAR_TIMEZONE=Asia/Kolkata
-   ```
-   OR paste the JSON content into `GOOGLE_SERVICE_ACCOUNT_JSON`
+### Auth approach — OAuth2 refresh token (ops team email)
+Service accounts hit a 403 (`forbiddenForServiceAccounts`) when inviting attendees.
+Solution: use OAuth2 user credentials tied to the ops team email directly.
+
+### One-time token setup
+```bash
+# Set your GCP OAuth app creds, then run:
+python scripts/get_calendar_token.py
+# Sign in as the OPS TEAM email → paste printed token into .env
+```
+
+### Required env vars
+```
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+GOOGLE_CALENDAR_REFRESH_TOKEN=<from get_calendar_token.py>
+GOOGLE_CALENDAR_ID=primary          # or specific calendar email
+GOOGLE_CALENDAR_TIMEZONE=Asia/Kolkata
+```
+
+### GCP checklist
+- Google Calendar API enabled
+- OAuth consent screen → ops email added as **Test User** (if app is in Testing mode)
+- Redirect URIs in GCP: `http://localhost:4000/auth/oauth/google/callback` and `http://localhost:4000/auth/oauth/internal/google/callback`
 
 ### What happens on Schedule click (when configured)
-1. Google Calendar API creates event → returns `meet.google.com/xxx` link
-2. Calendar invites sent to `client_email` + `advisor_email`
-3. Fireflies bot invited to that URL
-4. Meeting saved with real Meet link
+1. Google Calendar API (as ops email) creates event → returns `meet.google.com/xxx` link
+2. Meeting saved with real Meet link
+3. `sendUpdates="none"` currently — change to `"all"` in `routes/meetings.py` once verified
 
 ### What happens without Calendar config
-Meeting saved, Fireflies skipped silently, no Meet link generated. User can paste Meet URL manually in the form.
+Meeting saved, no Meet link generated. User can paste Meet URL manually in the form.
 
 ---
 
@@ -286,10 +298,12 @@ summary_worker consumes extraction.summarize
 
 ## Pending / next tasks
 
-- [ ] **Google Calendar service account** — user needs to set up (see setup above)
+- [ ] **Google Calendar refresh token** — run `scripts/get_calendar_token.py` as ops email, paste token into `.env` (see setup above)
+- [ ] **End-to-end calendar test** — schedule a meeting, confirm meet_url non-empty, event appears on ops calendar, attendee invites arrive; then change `sendUpdates="none"` → `"all"` in `routes/meetings.py`
 - [ ] **Google OAuth redirect URIs** — add to Google Cloud Console:
   - `http://localhost:4000/auth/oauth/google/callback`
   - `http://localhost:4000/auth/oauth/internal/google/callback`
+- [ ] **Fireflies end-to-end** — `addToLiveMeeting` only works on a live meeting URL; test by scheduling a real Meet and verifying bot joins
 - [ ] **Real DB procs** — backend team will deliver stored procs; uncomment real DB calls in proc stubs when ready
 - [ ] **OTP provider** — switch `OTP_PROVIDER` from `mock` to `twilio` once Twilio creds are ready
 - [ ] **transcript_processor.py:31** — replace direct `_meetings` import with a `fn_get_meeting_by_firefly_id` proc when DB is ready
@@ -313,9 +327,59 @@ cd apps/internal-app && npm run dev
 
 ---
 
+## Changes — session 2026-05-22
+
+### Google Calendar auth — switched from service account to OAuth2 user credentials
+
+**Problem:** Service accounts return 403 (`forbiddenForServiceAccounts`) when inviting attendees without Domain-Wide Delegation (requires paid Google Workspace).
+
+**Solution:** Use OAuth2 refresh token for the ops team email directly — no DWD needed.
+
+**`services/meeting-service/google_calendar_client.py`**
+- Replaced `service_account.Credentials` with `google.oauth2.credentials.Credentials`
+- Reads `GOOGLE_CALENDAR_REFRESH_TOKEN` + existing `GOOGLE_CLIENT_ID/SECRET`
+- Eagerly refreshes access token on each call
+
+**`services/meeting-service/config.py`**
+- Removed `google_service_account_file`, `google_service_account_json`, `google_impersonate_subject`
+- Added `google_calendar_refresh_token`
+
+**`services/meeting-service/requirements.txt`**
+- Added `google-auth-oauthlib==1.2.1`
+
+**`scripts/get_calendar_token.py`** (new)
+- One-time CLI script: opens browser → consent as ops email → prints refresh token
+
+**`services/meeting-service/firefly_client.py`**
+- Fixed `addToLiveMeeting` GraphQL mutation signature (`meeting_link` not `url`, no `scheduled_at`)
+- Now checks `success` field in response; better HTTP error logging
+
+**`services/meeting-service/routes/meetings.py`**
+- Simplified: removed Redis token fetch + per-user Google OAuth token logic
+- Calendar call now always uses ops email refresh token from settings
+- Fireflies direct API call removed (bot invited via calendar attendee instead)
+
+**`apps/internal-app/src/components/layout/Sidebar.tsx`**
+- Added logout button at bottom of sidebar with user name/email display
+- Uses `useAuth().logout()` → redirects to `/login`
+
+**`apps/internal-app/src/routes/SchedulingPage.tsx`**
+- Added date/time validation before submitting (prevents silent empty-field scheduling)
+
+**`docker-compose.yml`**
+- Added `FIREFLY_BOT_EMAIL` env passthrough to meeting-service
+- Added `secrets/gcp-sa.json` volume mount (still present for optional SA use)
+- Cleaned up service account env var passthrough
+
+**`.gitignore`**
+- Added `secrets/` to prevent accidental commit of key files
+
+---
+
 ## Commit history (recent)
+- `a433bb0` feat: replace service account with OAuth2 user credentials for Google Calendar
+- `aeecaed` feat: Google OAuth login + auto Meet link generation for internal-app scheduling
+- `822c712` feat: multi-advisor support, name sync, join meeting button
 - `540b15d` docs: add CLAUDE_CONTEXT.md — context file for continuing in new Claude sessions
 - `a020aa9` feat: meeting-service — full pipeline, scheduling from DB procs, Google Meet + Fireflies
 - `579a8a7` fix: wire /metrics on otp-service and user-service
-- `469adca` fix: full stack running — outbox direct publish, pretty logger, all Dockerfiles, observability
-- `bb475f7` feat: production hardening — proc layer, DLQ, tracing, metrics, outbox, circuit breaker

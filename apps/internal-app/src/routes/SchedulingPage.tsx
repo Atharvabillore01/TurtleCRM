@@ -87,6 +87,12 @@ export default function SchedulingPage() {
       return;
     }
 
+    if (!form.date || !form.time) {
+      setSubmitError("Please select a date and time for the meeting.");
+      setIsSubmitting(false);
+      return;
+    }
+
     const primaryAdvisor = advisors[0];
     const scheduledAt = buildDateTime(form.date, form.time);
 
