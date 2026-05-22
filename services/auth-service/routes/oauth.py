@@ -158,6 +158,7 @@ async def internal_google_callback(request: Request, code: str | None = None, er
         json.dumps({
             "access_token": token_data["access_token"],
             "refresh_token": token_data.get("refresh_token"),
+            "email": email,
         }),
     )
 
