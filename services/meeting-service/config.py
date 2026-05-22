@@ -18,10 +18,7 @@ class Settings(BaseSettings):
     google_client_id: str = ""
     google_client_secret: str = ""
 
-    # Google Calendar — OAuth2 refresh token for the ops team email.
-    # Run scripts/get_calendar_token.py once to generate this.
-    google_calendar_refresh_token: str = ""
-    # Calendar to create events on (primary = organiser's default calendar)
+    # Calendar to create events on (talk@turtlefinance.in's shared calendar)
     google_calendar_id: str = "primary"
     # Timezone for created events
     google_calendar_timezone: str = "Asia/Kolkata"
