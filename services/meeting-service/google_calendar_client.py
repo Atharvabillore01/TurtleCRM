@@ -1,16 +1,11 @@
 """
 Google Calendar client — creates Calendar events with Google Meet links.
 
-Uses OAuth2 user credentials (refresh token) for the ops team email so that
-attendee invites work without Domain-Wide Delegation or service accounts.
-
-Required env vars:
-  GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET   — OAuth2 app credentials
-  GOOGLE_CALENDAR_REFRESH_TOKEN            — refresh token for the ops email
+Uses the scheduling internal user's OAuth2 tokens (saved to Redis at login)
+so that Meet link generation works without service accounts or a shared secret.
 """
 
 import asyncio
-import json
 import uuid
 from datetime import datetime, timedelta
 
@@ -26,12 +21,11 @@ SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
 _TOKEN_URI = "https://oauth2.googleapis.com/token"
 
 
-def _build_credentials(settings) -> Credentials:
-    refresh_token = getattr(settings, "google_calendar_refresh_token", "") or ""
+def _build_credentials(settings, refresh_token: str) -> Credentials:
     if not refresh_token:
         raise RuntimeError(
-            "GOOGLE_CALENDAR_REFRESH_TOKEN is not set. "
-            "Run scripts/get_calendar_token.py once to generate it."
+            "No Google refresh token available for this user. "
+            "The internal user must log in via Google OAuth before scheduling."
         )
     creds = Credentials(
         token=None,
@@ -41,7 +35,6 @@ def _build_credentials(settings) -> Credentials:
         token_uri=_TOKEN_URI,
         scopes=SCOPES,
     )
-    # Eagerly refresh so the access token is valid before the API call.
     creds.refresh(Request())
     return creds
 
@@ -53,6 +46,7 @@ async def create_meet_event(
     scheduled_at: str,
     duration_minutes: int,
     attendee_emails: list[str],
+    refresh_token: str,
     timezone: str = "Asia/Kolkata",
     calendar_id: str = "primary",
 ) -> dict:
@@ -67,6 +61,7 @@ async def create_meet_event(
         scheduled_at,
         duration_minutes,
         attendee_emails,
+        refresh_token,
         timezone,
         calendar_id,
     )
@@ -79,10 +74,11 @@ def _create_event_sync(
     scheduled_at: str,
     duration_minutes: int,
     attendee_emails: list[str],
+    refresh_token: str,
     tz: str,
     calendar_id: str,
 ) -> dict:
-    creds = _build_credentials(settings)
+    creds = _build_credentials(settings, refresh_token)
     service = build("calendar", "v3", credentials=creds, cache_discovery=False)
 
     start_dt = _parse_datetime(scheduled_at)
@@ -108,7 +104,7 @@ def _create_event_sync(
             calendarId=calendar_id,
             body=event_body,
             conferenceDataVersion=1,
-            sendUpdates="none",
+            sendUpdates="all",
         )
         .execute()
     )

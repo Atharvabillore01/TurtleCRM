@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, status
@@ -14,6 +15,7 @@ from eventbus import publish_event
 from google_calendar_client import create_meet_event
 from logger import get_logger
 from metrics import meetings_scheduled_total
+from redis_client import get_redis
 
 router = APIRouter(prefix="/api/meetings", tags=["meetings"])
 logger = get_logger("meeting-service")
@@ -74,15 +76,37 @@ async def schedule_meeting(req: ScheduleMeetingRequest):
     meet_url = req.meeting_url  # fallback if calendar creation fails
     google_event_id = ""
 
+    # Fetch the scheduling user's Google OAuth refresh token from Redis
+    redis = get_redis()
+    refresh_token = ""
+    raw = await redis.get(f"google_cal_token:{req.created_by}")
+    if raw:
+        try:
+            refresh_token = json.loads(raw).get("refresh_token", "")
+        except Exception:
+            pass
+    logger.info("google_cal_token_lookup", extra={
+        "redis_key": f"google_cal_token:{req.created_by}",
+        "token_found": bool(raw),
+        "refresh_token_present": bool(refresh_token),
+        "raw_preview": (raw[:80] if raw else None),
+    })
 
     try:
+        attendees = list(filter(None, [
+            req.client_email,
+            *req.advisor_emails,
+            *([] if not req.advisor_email or req.advisor_email in req.advisor_emails else [req.advisor_email]),
+            *req.guests,
+        ]))
         cal_result = await create_meet_event(
             settings=settings,
             title=req.title or req.agenda,
             agenda=req.agenda,
             scheduled_at=req.scheduled_at,
             duration_minutes=req.duration_minutes,
-            attendee_emails=[],
+            attendee_emails=attendees,
+            refresh_token=refresh_token,
             timezone=settings.google_calendar_timezone,
             calendar_id=settings.google_calendar_id,
         )
