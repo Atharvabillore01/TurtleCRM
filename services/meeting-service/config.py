@@ -13,14 +13,14 @@ class Settings(BaseSettings):
 
     firefly_api_key: str = ""
     firefly_webhook_secret: str = ""
+    firefly_bot_email: str = ""
 
     google_client_id: str = ""
     google_client_secret: str = ""
 
-    # Google Calendar — path to service account JSON key file
-    # OR set GOOGLE_SERVICE_ACCOUNT_JSON to the raw JSON string
-    google_service_account_file: str = ""
-    google_service_account_json: str = ""
+    # Google Calendar — OAuth2 refresh token for the ops team email.
+    # Run scripts/get_calendar_token.py once to generate this.
+    google_calendar_refresh_token: str = ""
     # Calendar to create events on (primary = organiser's default calendar)
     google_calendar_id: str = "primary"
     # Timezone for created events

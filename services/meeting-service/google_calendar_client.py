@@ -1,20 +1,20 @@
 """
-Google Calendar client — creates Calendar events with Google Meet links using
-a stored user OAuth token (obtained when the internal team member logged in).
+Google Calendar client — creates Calendar events with Google Meet links.
 
-User OAuth (not service account) can:
-  - Create Meet links via conferenceData
-  - Send calendar invite emails to attendees
-  - No Domain-Wide Delegation or Workspace required
+Uses OAuth2 user credentials (refresh token) for the ops team email so that
+attendee invites work without Domain-Wide Delegation or service accounts.
 
-The OAuth token is stored in Redis by the auth-service after Google login
-under key: google_cal_token:{user_id}
+Required env vars:
+  GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET   — OAuth2 app credentials
+  GOOGLE_CALENDAR_REFRESH_TOKEN            — refresh token for the ops email
 """
 
 import asyncio
+import json
 import uuid
 from datetime import datetime, timedelta
 
+from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 
@@ -23,6 +23,27 @@ from logger import get_logger
 logger = get_logger("meeting-service")
 
 SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
+_TOKEN_URI = "https://oauth2.googleapis.com/token"
+
+
+def _build_credentials(settings) -> Credentials:
+    refresh_token = getattr(settings, "google_calendar_refresh_token", "") or ""
+    if not refresh_token:
+        raise RuntimeError(
+            "GOOGLE_CALENDAR_REFRESH_TOKEN is not set. "
+            "Run scripts/get_calendar_token.py once to generate it."
+        )
+    creds = Credentials(
+        token=None,
+        refresh_token=refresh_token,
+        client_id=settings.google_client_id,
+        client_secret=settings.google_client_secret,
+        token_uri=_TOKEN_URI,
+        scopes=SCOPES,
+    )
+    # Eagerly refresh so the access token is valid before the API call.
+    creds.refresh(Request())
+    return creds
 
 
 async def create_meet_event(
@@ -33,16 +54,9 @@ async def create_meet_event(
     duration_minutes: int,
     attendee_emails: list[str],
     timezone: str = "Asia/Kolkata",
-    google_access_token: str | None = None,
-    google_refresh_token: str | None = None,
+    calendar_id: str = "primary",
 ) -> dict:
     """Returns { meet_url, event_id, event_link }."""
-    if not google_access_token:
-        raise RuntimeError(
-            "No Google OAuth token for the scheduling user. "
-            "Have the ops team log in via Google first."
-        )
-
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(
         None,
@@ -54,8 +68,7 @@ async def create_meet_event(
         duration_minutes,
         attendee_emails,
         timezone,
-        google_access_token,
-        google_refresh_token,
+        calendar_id,
     )
 
 
@@ -67,18 +80,9 @@ def _create_event_sync(
     duration_minutes: int,
     attendee_emails: list[str],
     tz: str,
-    access_token: str,
-    refresh_token: str | None,
+    calendar_id: str,
 ) -> dict:
-    creds = Credentials(
-        token=access_token,
-        refresh_token=refresh_token,
-        token_uri="https://oauth2.googleapis.com/token",
-        client_id=settings.google_client_id,
-        client_secret=settings.google_client_secret,
-        scopes=SCOPES,
-    )
-
+    creds = _build_credentials(settings)
     service = build("calendar", "v3", credentials=creds, cache_discovery=False)
 
     start_dt = _parse_datetime(scheduled_at)
@@ -101,7 +105,7 @@ def _create_event_sync(
     created = (
         service.events()
         .insert(
-            calendarId="primary",
+            calendarId=calendar_id,
             body=event_body,
             conferenceDataVersion=1,
             sendUpdates="none",
