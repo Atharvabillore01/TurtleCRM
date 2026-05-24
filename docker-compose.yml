@@ -207,6 +207,7 @@ services:
     volumes:
       - ./logs/meeting-service:/app/logs
       - ./secrets/gcp-sa.json:/app/secrets/gcp-sa.json:ro
+      - ./transcripts:/app/transcripts
     depends_on:
       rabbitmq:
         condition: service_healthy

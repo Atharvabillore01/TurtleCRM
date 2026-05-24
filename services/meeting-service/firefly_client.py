@@ -69,14 +69,19 @@ class FireflyClient:
             logger.info("firefly_bot_added", extra={"meeting_url": meeting_url, "title": title})
             return {"firefly_meeting_id": meeting_url, "firefly_meeting_url": meeting_url}
 
-    async def get_transcript(self, firefly_meeting_id: str) -> str:
-        """Fetch the full transcript text for a completed meeting."""
+    async def get_transcript(self, firefly_meeting_id: str) -> dict:
+        """
+        Fetch the full transcript + metadata for a completed meeting.
+        Returns { text, meeting_link, transcript_url, title, duration }.
+        """
         query = """
         query GetTranscript($id: String!) {
           transcript(id: $id) {
             id
             title
             transcript_url
+            meeting_link
+            duration
             sentences {
               text
               speaker_name
@@ -84,7 +89,7 @@ class FireflyClient:
           }
         }
         """
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
                 FIREFLY_API,
                 headers=self._headers,
@@ -94,13 +99,18 @@ class FireflyClient:
             data = resp.json()
             if "errors" in data:
                 raise RuntimeError(f"Firefly API error: {data['errors']}")
-            transcript = data["data"]["transcript"]
-            # Join sentences into a readable transcript
+            transcript = data["data"]["transcript"] or {}
             lines = [
                 f"{s['speaker_name']}: {s['text']}"
                 for s in (transcript.get("sentences") or [])
             ]
-            return "\n".join(lines)
+            return {
+                "text": "\n".join(lines),
+                "meeting_link": transcript.get("meeting_link", ""),
+                "transcript_url": transcript.get("transcript_url", ""),
+                "title": transcript.get("title", ""),
+                "duration": transcript.get("duration") or 0,
+            }
 
     async def cancel_meeting(self, firefly_meeting_id: str) -> bool:
         """
