@@ -1,41 +1,44 @@
 """
 Google Calendar client — creates Calendar events with Google Meet links.
 
-Uses the scheduling internal user's OAuth2 tokens (saved to Redis at login)
-so that Meet link generation works without service accounts or a shared secret.
+Uses a Google Service Account with Domain-Wide Delegation that impersonates
+a Workspace user (configured via GOOGLE_IMPERSONATE_EMAIL).
 """
 
 import asyncio
+import os
 import uuid
 from datetime import datetime, timedelta
 
-from google.auth.transport.requests import Request
-from google.oauth2.credentials import Credentials
+from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
 from logger import get_logger
 
 logger = get_logger("meeting-service")
 
-SCOPES = ["https://www.googleapis.com/auth/calendar.events"]
-_TOKEN_URI = "https://oauth2.googleapis.com/token"
+SCOPES = [
+    "https://www.googleapis.com/auth/calendar.events",
+    "https://www.googleapis.com/auth/calendar.freebusy",
+]
 
 
-def _build_credentials(settings, refresh_token: str) -> Credentials:
-    if not refresh_token:
+def _build_credentials(settings):
+    key_path = settings.google_service_account_file
+    impersonate = (settings.google_impersonate_email or "").strip()
+    if not os.path.exists(key_path):
         raise RuntimeError(
-            "No Google refresh token available for this user. "
-            "The internal user must log in via Google OAuth before scheduling."
+            f"Service account key file not found at {key_path!r}. "
+            "Set GOOGLE_SERVICE_ACCOUNT_FILE and mount the key into the container."
         )
-    creds = Credentials(
-        token=None,
-        refresh_token=refresh_token,
-        client_id=settings.google_client_id,
-        client_secret=settings.google_client_secret,
-        token_uri=_TOKEN_URI,
-        scopes=SCOPES,
-    )
-    creds.refresh(Request())
+    if not impersonate:
+        raise RuntimeError(
+            "GOOGLE_IMPERSONATE_EMAIL is not set. Domain-Wide Delegation requires "
+            "a Workspace user to impersonate."
+        )
+    creds = service_account.Credentials.from_service_account_file(
+        key_path, scopes=SCOPES
+    ).with_subject(impersonate)
     return creds
 
 
@@ -46,7 +49,6 @@ async def create_meet_event(
     scheduled_at: str,
     duration_minutes: int,
     attendee_emails: list[str],
-    refresh_token: str,
     timezone: str = "Asia/Kolkata",
     calendar_id: str = "primary",
 ) -> dict:
@@ -61,7 +63,6 @@ async def create_meet_event(
         scheduled_at,
         duration_minutes,
         attendee_emails,
-        refresh_token,
         timezone,
         calendar_id,
     )
@@ -74,11 +75,10 @@ def _create_event_sync(
     scheduled_at: str,
     duration_minutes: int,
     attendee_emails: list[str],
-    refresh_token: str,
     tz: str,
     calendar_id: str,
 ) -> dict:
-    creds = _build_credentials(settings, refresh_token)
+    creds = _build_credentials(settings)
     service = build("calendar", "v3", credentials=creds, cache_discovery=False)
 
     start_dt = _parse_datetime(scheduled_at)
@@ -90,6 +90,9 @@ def _create_event_sync(
         "start": {"dateTime": start_dt.strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": tz},
         "end":   {"dateTime": end_dt.strftime("%Y-%m-%dT%H:%M:%S"),   "timeZone": tz},
         "attendees": [{"email": e} for e in attendee_emails if e],
+        "guestsCanInviteOthers": True,
+        "guestsCanSeeOtherGuests": True,
+        "anyoneCanAddSelf": True,
         "conferenceData": {
             "createRequest": {
                 "requestId": str(uuid.uuid4()),
