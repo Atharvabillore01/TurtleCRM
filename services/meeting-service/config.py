@@ -18,9 +18,16 @@ class Settings(BaseSettings):
     google_client_id: str = ""
     google_client_secret: str = ""
 
-    # Calendar to create events on (talk@turtlefinance.in's shared calendar)
+    # Service Account (Domain-Wide Delegation).
+    # Path to the SA JSON key, mounted into the container by docker-compose.
+    google_service_account_file: str = "/app/secrets/gcp-sa.json"
+    # Workspace user the SA impersonates (DWD). Required for Meet link creation
+    # and inviting attendees. Must be a valid Workspace user on a domain that
+    # has DWD authorized for this SA.
+    google_impersonate_email: str = ""
+
+    # Calendar to create events on. "primary" when impersonating a Workspace user.
     google_calendar_id: str = "primary"
-    # Timezone for created events
     google_calendar_timezone: str = "Asia/Kolkata"
 
 
