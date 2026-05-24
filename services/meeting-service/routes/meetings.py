@@ -11,6 +11,7 @@ from db.meeting_procs import (
     proc_update_meeting_firefly_id,
 )
 from eventbus import publish_event
+from firefly_client import FireflyClient
 from google_calendar_client import create_meet_event
 from logger import get_logger
 from metrics import meetings_scheduled_total
@@ -127,6 +128,33 @@ async def schedule_meeting(req: ScheduleMeetingRequest):
     meetings_scheduled_total.inc()
     logger.info("meeting_scheduled", extra={"meeting_id": meeting_id, "client_id": req.client_id, "meet_url": meet_url})
     return {"meeting_id": meeting_id, "status": "scheduled", "meet_url": meet_url, "google_event_id": google_event_id}
+
+
+@router.get("/transcript/{firefly_meeting_id}")
+async def get_transcript_by_firefly_id(firefly_meeting_id: str):
+    """
+    Fetch a transcript directly from Fireflies by their meeting id.
+    Useful for pulling transcripts from older meetings that weren't scheduled
+    through this service.
+    """
+    if not settings.firefly_api_key:
+        raise HTTPException(status_code=500, detail="FIREFLY_API_KEY is not configured")
+    try:
+        client = FireflyClient(settings.firefly_api_key)
+        result = await client.get_transcript(firefly_meeting_id)
+    except Exception as exc:
+        logger.error("firefly_transcript_fetch_failed", extra={
+            "error": str(exc), "firefly_meeting_id": firefly_meeting_id,
+        })
+        raise HTTPException(status_code=502, detail=f"Fireflies API error: {exc}")
+    return {
+        "firefly_meeting_id": firefly_meeting_id,
+        "title": result["title"],
+        "meeting_link": result["meeting_link"],
+        "transcript_url": result["transcript_url"],
+        "duration": result["duration"],
+        "transcript": result["text"],
+    }
 
 
 @router.delete("/{meeting_id}", status_code=status.HTTP_200_OK)
