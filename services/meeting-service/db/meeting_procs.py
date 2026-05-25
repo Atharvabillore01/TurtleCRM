@@ -719,6 +719,61 @@ async def _fn_list_extractions(validated: bool | None = None) -> ProcResult:
     return ProcResult(result=results)
 
 
+def hydrate_extractions_from_disk(extractions_dir: str = "/app/transcripts/extractions") -> int:
+    """
+    Load every saved extraction JSON into the in-memory _extractions store so the
+    /api/extractions endpoints survive container restarts without a DB.
+    Returns the number of extractions loaded.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    root = _Path(extractions_dir)
+    if not root.exists():
+        return 0
+
+    loaded = 0
+    for path in root.glob("*.json"):
+        try:
+            data = _json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        extraction_id = data.get("extraction_id")
+        if not extraction_id or extraction_id in _extractions:
+            continue
+        fields = data.get("fields", {})
+        _extractions[extraction_id] = ExtractionRow(
+            id=extraction_id,
+            client_id=data.get("client_id", ""),
+            meeting_id=data.get("meeting_id", ""),
+            extraction_job_id=data.get("extraction_job_id", f"job-{extraction_id}"),
+            provider="crm-ai",
+            model=data.get("model", "unknown"),
+            extracted_at=data.get("extracted_at", ""),
+            duration_seconds=data.get("duration_seconds", 0.0),
+            total_fields=len(fields),
+            raw_data=fields,
+        )
+        # Stub the parent meeting row so /api/extractions/{id} responses are complete.
+        meeting_id = data.get("meeting_id", "")
+        if meeting_id and meeting_id not in _meetings:
+            _meetings[meeting_id] = MeetingRow(
+                id=meeting_id,
+                client_id=data.get("client_id", ""),
+                advisor_id="",
+                scheduled_at=data.get("extracted_at", ""),
+                duration_minutes=int(data.get("duration_seconds") or 0) // 60,
+                agenda=data.get("agenda", ""),
+                title=data.get("agenda", ""),
+                status="extraction_completed",
+                extraction_status="completed",
+                firefly_meeting_id=data.get("firefly_meeting_id", ""),
+                meeting_url=data.get("meet_url", ""),
+            )
+        loaded += 1
+    return loaded
+
+
 async def _sp_validate_extraction(
     extraction_id: str,
     validated_by: str,
@@ -762,7 +817,8 @@ def register_meeting_procs() -> None:
     register_proc("fn_get_extraction", _fn_get_extraction)
     register_proc("fn_list_extractions", _fn_list_extractions)
     register_proc("sp_validate_extraction", _sp_validate_extraction)
-    _seed_dummy_data()
+    # NOTE: seed data disabled — API now returns only real extractions
+    # (hydrated from disk on startup, plus anything added live).
 
 
 # ── Public wrappers ───────────────────────────────────────────────────────────

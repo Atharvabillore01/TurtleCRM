@@ -44,6 +44,13 @@ async def _handle_summarize(payload: dict) -> None:
             )
             resp.raise_for_status()
             summary_data: dict = resp.json()
+    except httpx.HTTPStatusError as exc:
+        # 404 just means the agent service doesn't expose /summarize yet — skip quietly.
+        if exc.response.status_code == 404:
+            logger.info("ai_summarize_not_available", extra={"meeting_id": meeting_id})
+        else:
+            logger.error("ai_summarize_failed", extra={"error": str(exc), "meeting_id": meeting_id})
+        return
     except httpx.HTTPError as exc:
         logger.error("ai_summarize_failed", extra={"error": str(exc), "meeting_id": meeting_id})
         return
