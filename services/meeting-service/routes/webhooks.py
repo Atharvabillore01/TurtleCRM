@@ -30,19 +30,40 @@ logger = get_logger("meeting-service")
 
 TRANSCRIPTS_DIR = Path(os.environ.get("TRANSCRIPTS_DIR", "/app/transcripts"))
 
-# Temporary hardcoded allowlist while we don't have a DB-backed scheduled-meeting
-# join. Only transcripts whose meeting_link matches one of these are processed.
-# TODO: replace with a DB lookup by meet_url once the meetings table is live.
-ALLOWED_MEET_URLS = {
-    "https://meet.google.com/jec-cfnd-wdg",
+# Hardcoded meeting context per Meet URL — temporary stand-in for a DB lookup.
+# When Fireflies' transcript meeting_link matches a key here, the dict value is
+# attached to the published event so the agent worker has client_id +
+# agents_to_use without a DB row.
+# TODO: replace with `proc_find_by_meet_url(meet_url)` once meetings rows exist.
+ALLOWED_MEETINGS: dict[str, dict] = {
+    "https://meet.google.com/jec-cfnd-wdg": {
+        "meeting_id":    "test-meeting-001",
+        "client_id":     "client_2",
+        "agenda":        "Initial Consultation — Financial Planning",
+        "agents_to_use": [
+            "DemographicsAgent",
+            "FinanceAgent",
+            "GoalsAgent",
+            "ProfessionalAgent",
+            "QualitativeAgent",
+            "SystemResolver",
+        ],
+    },
 }
 
 
-def _meet_url_matches(meet_url: str) -> bool:
+def _normalize(url: str) -> str:
+    return url.strip().rstrip("/").lower()
+
+
+def _lookup_meeting_context(meet_url: str) -> dict | None:
     if not meet_url:
-        return False
-    normalized = meet_url.strip().rstrip("/").lower()
-    return any(u.strip().rstrip("/").lower() == normalized for u in ALLOWED_MEET_URLS)
+        return None
+    target = _normalize(meet_url)
+    for url, ctx in ALLOWED_MEETINGS.items():
+        if _normalize(url) == target:
+            return ctx
+    return None
 
 TRANSCRIBED_EVENTS = {
     "meeting.transcribed",
@@ -156,11 +177,12 @@ async def _handle_transcript_ready(firefly_meeting_id: str) -> None:
     transcript_url = result["transcript_url"]
     duration = result["duration"]
 
-    if not _meet_url_matches(meet_url):
+    ctx = _lookup_meeting_context(meet_url)
+    if ctx is None:
         logger.info("firefly_transcript_skipped_meet_url_filter", extra={
             "firefly_meeting_id": firefly_meeting_id,
             "meet_url": meet_url,
-            "allowed": list(ALLOWED_MEET_URLS),
+            "allowed": list(ALLOWED_MEETINGS.keys()),
         })
         return
 
@@ -188,7 +210,8 @@ async def _handle_transcript_ready(firefly_meeting_id: str) -> None:
     })
 
     # Publish for the next phase (agent extraction). Carries everything the
-    # downstream worker needs without requiring a DB row.
+    # downstream worker needs without requiring a DB row — including the
+    # hardcoded meeting context (client_id, agents_to_use, agenda).
     await publish_event("meeting.transcribed", {
         "firefly_meeting_id": firefly_meeting_id,
         "title": title,
@@ -197,6 +220,11 @@ async def _handle_transcript_ready(firefly_meeting_id: str) -> None:
         "duration_seconds": int(duration or 0),
         "transcript_path": str(saved_path),
         "transcript_text": transcript_text,
+        # ── meeting context (will come from DB once rows exist) ──
+        "meeting_id":    ctx["meeting_id"],
+        "client_id":     ctx["client_id"],
+        "agenda":        ctx["agenda"],
+        "agents_to_use": ctx["agents_to_use"],
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
     logger.info("transcript_event_published", extra={"firefly_meeting_id": firefly_meeting_id})

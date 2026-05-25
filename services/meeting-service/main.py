@@ -6,7 +6,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import settings
-from db.meeting_procs import register_meeting_procs
+from db.meeting_procs import hydrate_extractions_from_disk, register_meeting_procs
 from eventbus import disconnect_publisher
 from redis_client import close_redis
 from logger import get_logger
@@ -27,7 +27,11 @@ _worker_tasks: list[asyncio.Task] = []
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     register_meeting_procs()
-    logger.info("meeting_service_starting", extra={"port": settings.meeting_service_port})
+    loaded = hydrate_extractions_from_disk()
+    logger.info("meeting_service_starting", extra={
+        "port": settings.meeting_service_port,
+        "extractions_loaded_from_disk": loaded,
+    })
 
     _worker_tasks.append(asyncio.create_task(run_transcript_processor(), name="transcript-processor"))
     _worker_tasks.append(asyncio.create_task(run_data_persistence(), name="data-persistence"))

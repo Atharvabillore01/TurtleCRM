@@ -40,13 +40,19 @@ function getSuggestionsForMeeting(meetingId: any, meetingName: any) {
 }
 
 export default function AiValidationPage() {
-  const [clientProfiles, setClientProfiles] = useState<any[]>(mockClientProfiles as any[]);
+  const [clientProfiles, setClientProfiles] = useState<any[]>([]);
+  const [selectedMeetingId, setSelectedMeetingId] = useState<string>("");
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     fetchExtractions()
       .then((extractions) => {
         const first = extractions[0];
-        if (!first) return;
+        if (!first) {
+          setClientProfiles([]);
+          return;
+        }
         const liveProfile = {
           id: first.client_id,
           name: `Client ${first.client_id}`,
@@ -65,16 +71,17 @@ export default function AiValidationPage() {
             values: extractionToMeetingValues(e.raw_data),
           })),
         };
-        setClientProfiles([liveProfile, ...(mockClientProfiles as any[])]);
+        setClientProfiles([liveProfile]);
+        if (liveProfile.meetings[0]) {
+          setSelectedMeetingId(liveProfile.meetings[0].id);
+        }
       })
-      .catch(() => {
-        // meeting-service unavailable — keep mockData
-      });
+      .catch((err) => {
+        setLoadError(err?.message || "Failed to load extractions");
+        setClientProfiles([]);
+      })
+      .finally(() => setLoading(false));
   }, []);
-
-  const [selectedMeetingId, setSelectedMeetingId] = useState(
-    (mockClientProfiles as any)[0].meetings[0].id,
-  );
   const [editedValues, setEditedValues] = useState<Record<string, any>>({});
   const [approvedValues, setApprovedValues] = useState<Record<string, any>>({});
   const [rejectedValues, setRejectedValues] = useState<Record<string, any>>({});
@@ -98,6 +105,30 @@ export default function AiValidationPage() {
       recentMeetings[0],
     [recentMeetings, selectedMeetingId],
   );
+
+  // Empty / loading / error states — nothing to render against.
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-screen text-slate-500">
+        Loading extractions…
+      </div>
+    );
+  }
+  if (loadError) {
+    return (
+      <div className="flex items-center justify-center h-screen text-red-500">
+        Failed to load extractions: {loadError}
+      </div>
+    );
+  }
+  if (!selectedPair) {
+    return (
+      <div className="flex flex-col items-center justify-center h-screen text-slate-500 gap-2">
+        <h2 className="text-xl font-semibold">No extractions yet</h2>
+        <p>Schedule a meeting and let the bot record + transcribe — extractions will show up here.</p>
+      </div>
+    );
+  }
 
   const selectedClient = selectedPair.client;
   const selectedMeeting = selectedPair.meeting;
