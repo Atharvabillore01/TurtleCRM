@@ -48,10 +48,12 @@ services:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
+      interval: 15s
+      timeout: 15s
+      retries: 10
+      # RabbitMQ on Windows/WSL2 Docker Desktop can take 3–5 min to boot
+      # because Erlang does many small file ops on a slow shared filesystem.
+      start_period: 300s
 
   # ─── Backend Services ──────────────────────────────────────────────────────
 
@@ -84,10 +86,10 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health')\""]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
+      interval: 20s
+      timeout: 30s
+      retries: 10
+      start_period: 90s
 
   otp-service:
     build:
@@ -114,10 +116,10 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4001/health')\""]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
+      interval: 20s
+      timeout: 30s
+      retries: 10
+      start_period: 90s
 
   user-service:
     build:
@@ -142,10 +144,10 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4002/health')\""]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
+      interval: 20s
+      timeout: 30s
+      retries: 10
+      start_period: 90s
 
   notification-service:
     build:
@@ -172,10 +174,10 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4003/health')\""]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
+      interval: 20s
+      timeout: 30s
+      retries: 10
+      start_period: 90s
 
   # outbox-publisher: disabled — direct publish in outbox.py handles delivery in stub mode.
   # Re-enable when real sp_poll_unpublished_events proc + real DB are in place.
@@ -197,7 +199,7 @@ services:
       FIREFLY_API_KEY: ${FIREFLY_API_KEY:-}
       FIREFLY_WEBHOOK_SECRET: ${FIREFLY_WEBHOOK_SECRET:-}
       FIREFLY_BOT_EMAIL: ${FIREFLY_BOT_EMAIL:-}
-      CRM_AI_SERVICE_URL: ${CRM_AI_SERVICE_URL:-http://host.docker.internal:8090}
+      CRM_AI_SERVICE_URL: ${CRM_AI_SERVICE_URL:-http://crm-agent:5000}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_SERVICE_ACCOUNT_FILE: /app/secrets/gcp-sa.json
@@ -213,12 +215,27 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      crm-agent:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4004/health')\""]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
+      interval: 20s
+      timeout: 30s
+      retries: 10
+      start_period: 90s
+
+  crm-agent:
+    build:
+      context: .
+      dockerfile: turtle-crm-agent/turtle-crm-agent/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    env_file:
+      - turtle-crm-agent/turtle-crm-agent/.env
+    volumes:
+      - ./logs/crm-agent:/app/logs
+      - ./turtle-crm-agent/turtle-crm-agent/output:/app/output
 
   # ─── Frontend Apps ─────────────────────────────────────────────────────────
 
