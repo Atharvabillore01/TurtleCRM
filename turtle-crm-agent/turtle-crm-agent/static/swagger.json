@@ -1,0 +1,239 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Turtle CRM Extraction API",
+    "description": "AI-powered CRM field extraction from financial advisory call transcripts. Supports English, Hindi (Devanagari), and Hinglish. Extracts up to 174 CRM parameters with confidence scores.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    { "url": "http://localhost:5000", "description": "Local development" }
+  ],
+  "tags": [
+    { "name": "Extraction", "description": "CRM field extraction from transcripts" },
+    { "name": "Streaming", "description": "Live transcript chunk handling (placeholder)" },
+    { "name": "System",    "description": "Health and status" }
+  ],
+  "paths": {
+    "/extract": {
+      "post": {
+        "tags": ["Extraction"],
+        "summary": "Extract CRM fields from a transcript",
+        "description": "Runs all extraction agents (Demographics, Finance, Goals, Professional, Schedule, Qualitative, Task, Feedback) on the supplied transcript and returns fields with confidence >= threshold.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ExtractRequest" },
+              "examples": {
+                "basic": {
+                  "summary": "Simple English transcript",
+                  "value": {
+                    "client_id": "client_1",
+                    "client_name": "Rahul Sharma",
+                    "transcript": "Speaker 1 [0:00]: Hi Rahul, how are you?\nSpeaker 2 [0:05]: Good. I work at Google in Bangalore. My monthly take-home is around 3.5 lakh. My wife and I have two kids.",
+                    "mode": "prod"
+                  }
+                },
+                "hinglish": {
+                  "summary": "Hinglish transcript",
+                  "value": {
+                    "client_id": "client_3",
+                    "client_name": "Akshay",
+                    "transcript": "Speaker 1 [0:00]: Akshay bhai kaise ho?\nSpeaker 2 [0:05]: Sab theek hai. Main Microsoft mein kaam karta hoon Seattle mein. Monthly around 2 lakh after tax milta hai.",
+                    "mode": "prod"
+                  }
+                },
+                "model_override": {
+                  "summary": "Override model for this request",
+                  "value": {
+                    "client_id": "client_1",
+                    "client_name": "Rahul Sharma",
+                    "transcript": "Speaker 1 [0:00]: Hi. Speaker 2 [0:05]: I live in Dubai, planning to return to India.",
+                    "mode": "dev",
+                    "model": "claude-opus-4-6"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Extraction successful",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ExtractResponse" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "500": { "$ref": "#/components/responses/ServerError" }
+        }
+      }
+    },
+    "/transcript/chunk": {
+      "post": {
+        "tags": ["Streaming"],
+        "summary": "Submit a live transcript chunk",
+        "description": "Placeholder for Fireflies / call-streaming integration. Currently logs the chunk. Will support incremental extraction in a future release.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ChunkRequest" },
+              "example": {
+                "client_id": "client_1",
+                "chunk": "Speaker 1 [1:32]: So what is your current monthly income?"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Chunk received",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "example": "received" },
+                    "length": { "type": "integer", "example": 52 }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "tags": ["System"],
+        "summary": "Health check",
+        "description": "Returns 200 OK when the service is running. Used by load balancers and the Node.js CRM service.",
+        "responses": {
+          "200": {
+            "description": "Service is healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "example": "ok" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ExtractRequest": {
+        "type": "object",
+        "required": ["client_id", "transcript"],
+        "properties": {
+          "client_id": {
+            "type": "string",
+            "description": "Unique client identifier",
+            "example": "client_1"
+          },
+          "client_name": {
+            "type": "string",
+            "description": "Human-readable client name (optional)",
+            "example": "Rahul Sharma"
+          },
+          "transcript": {
+            "type": "string",
+            "description": "Full conversation transcript. Supports English, Hindi (Devanagari), and Hinglish. Formats: markdown (**Speaker** *[ts]*:) or plain (Speaker N [MM:SS]:).",
+            "example": "Speaker 1 [0:00]: Hi. Speaker 2 [0:05]: I work at Google, earn 3 lakh per month."
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["dev", "prod"],
+            "default": "prod",
+            "description": "dev = development/testing, prod = production"
+          },
+          "model": {
+            "type": "string",
+            "description": "Override the LLM model for this request only. Leave blank to use the default from .env.",
+            "example": "claude-opus-4-6"
+          }
+        }
+      },
+      "ExtractResponse": {
+        "type": "object",
+        "properties": {
+          "clientId":   { "type": "string", "example": "client_1" },
+          "clientName": { "type": "string", "example": "Rahul Sharma" },
+          "mode":       { "type": "string", "example": "prod" },
+          "totalExtracted": { "type": "integer", "example": 42 },
+          "processingTime": { "type": "number", "example": 18.4 },
+          "extractedFields": {
+            "type": "object",
+            "description": "Map of field_id -> field data. Only fields with confidence >= threshold are included.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/ExtractedField"
+            }
+          },
+          "tokenUsage": {
+            "type": "object",
+            "description": "Token consumption per agent plus __total__",
+            "example": {
+              "demographics": { "input_tokens": 4821, "output_tokens": 1203, "total_tokens": 6024 },
+              "__total__": { "input_tokens": 40344, "output_tokens": 7620, "total_tokens": 47964 }
+            }
+          }
+        }
+      },
+      "ExtractedField": {
+        "type": "object",
+        "properties": {
+          "fieldId":         { "type": "string",  "example": "2" },
+          "attribute":       { "type": "string",  "example": "Lead / Client Name" },
+          "touchPoint":      { "type": "string",  "example": "Demographics & Family" },
+          "value":           { "example": "Rahul Sharma" },
+          "confidence":      { "type": "number",  "example": 0.95 },
+          "confidenceLevel": { "type": "string",  "example": "exact_quote" },
+          "source":          { "type": "string",  "example": "Client said 'my name is Rahul Sharma'" }
+        }
+      },
+      "ChunkRequest": {
+        "type": "object",
+        "required": ["chunk"],
+        "properties": {
+          "client_id": { "type": "string", "example": "client_1" },
+          "chunk":     { "type": "string", "example": "Speaker 1 [1:32]: So what is your current monthly income?" }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "error":  { "type": "string", "example": "transcript is required" },
+          "detail": { "type": "string", "example": "Additional error context" }
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Invalid request",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+          }
+        }
+      },
+      "ServerError": {
+        "description": "Extraction failed",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+          }
+        }
+      }
+    }
+  }
+}
