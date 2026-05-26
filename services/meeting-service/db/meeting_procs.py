@@ -51,6 +51,8 @@ class MeetingRow:
     # extraction
     extraction_job_id: Optional[str] = None
     extraction_status: Optional[str] = None
+    # ops-selected CRM agents to run on the post-meeting transcript (empty = all)
+    agents_to_use: list = field(default_factory=list)
     created_by: Optional[str] = None
     created_at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -413,6 +415,7 @@ async def _sp_schedule_meeting(
     guests: list | None = None,
     notes: str | None = None,
     meeting_url: str | None = None,
+    agents_to_use: list | None = None,
 ) -> ProcResult:
     # TODO: replace body with real DB proc call when sp_schedule_meeting is ready
     # async with get_db_pool().acquire() as conn:
@@ -449,6 +452,7 @@ async def _sp_schedule_meeting(
         guests=guests or [],
         notes=notes,
         meeting_url=meeting_url,
+        agents_to_use=agents_to_use or [],
         created_by=created_by,
     )
     return ProcResult(result=meeting_id, nextAction="create_firefly_meeting")
@@ -687,6 +691,7 @@ async def _fn_list_meetings() -> ProcResult:
             "meeting_url": m.meeting_url or m.firefly_meeting_url or "",
             "firefly_meeting_id": m.firefly_meeting_id or "",
             "extraction_status": m.extraction_status or "",
+            "agents_to_use": m.agents_to_use or [],
             "created_by": m.created_by or "",
             "created_at": m.created_at,
         }
@@ -849,6 +854,20 @@ async def proc_schedule_meeting(**kwargs) -> MeetingRow:
     if not res.ok:
         raise ValueError(res.errormessage) if res.errornumber in (1001, 1002, 1003, 1004) else RuntimeError(res.errormessage)
     return res.result
+
+
+def proc_find_meeting_by_meet_url(meet_url: str) -> Optional[MeetingRow]:
+    """Return the in-memory meeting row whose meeting_url or firefly_meeting_url
+    matches `meet_url` (normalised). Sync — reads the in-memory store directly.
+    Replace with a real DB proc call when sp_find_meeting_by_meet_url is ready."""
+    if not meet_url:
+        return None
+    target = meet_url.strip().rstrip("/").lower()
+    for m in _meetings.values():
+        for candidate in (m.meeting_url, m.firefly_meeting_url):
+            if candidate and candidate.strip().rstrip("/").lower() == target:
+                return m
+    return None
 
 
 async def proc_update_meeting_firefly_id(**kwargs):

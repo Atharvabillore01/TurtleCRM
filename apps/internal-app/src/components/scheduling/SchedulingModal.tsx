@@ -12,6 +12,8 @@ export default function SchedulingModal({
   onToggleAdvisor,
   onAddGuest,
   onRemoveGuest,
+  agentOptions = [],
+  onToggleAgent,
   isSubmitting,
   submitError,
 }: any) {
@@ -130,6 +132,41 @@ export default function SchedulingModal({
               placeholder="Enter agenda..."
             />
           </label>
+
+          <div className="col-span-2 grid gap-2 mobile:col-span-1">
+            <span className="text-xs font-extrabold text-muted uppercase">
+              Agents to run on transcript
+              <span className="ml-2 text-[10px] font-bold text-muted normal-case">
+                (empty = run all)
+              </span>
+            </span>
+            {agentOptions.length === 0 ? (
+              <p className="text-xs text-muted m-0">No agents available.</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {agentOptions.map((agent: any) => {
+                  const selected = (formValues.selectedAgents || []).includes(agent.name);
+                  return (
+                    <button
+                      key={agent.name}
+                      type="button"
+                      onClick={() => onToggleAgent && onToggleAgent(agent.name)}
+                      className={
+                        "inline-flex items-center gap-2 min-h-[34px] px-3 rounded-full border text-xs font-extrabold cursor-pointer transition-colors " +
+                        (selected
+                          ? "border-[rgba(46,222,190,0.7)] bg-[#d8fff6] text-[#0f6e5d]"
+                          : "border-line bg-white text-ink hover:bg-[#f7fffd]")
+                      }
+                      title={agent.touch_point}
+                    >
+                      <span>{agent.name.replace(/Agent$/, "")}</span>
+                      {selected && <strong className="text-xs">✓</strong>}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
 
           <label className="grid gap-2">
             <span className="text-xs font-extrabold text-muted uppercase">Date</span>

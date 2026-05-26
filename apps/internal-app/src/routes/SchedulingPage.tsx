@@ -3,7 +3,14 @@ import SchedulingView from "../components/scheduling/SchedulingView";
 import SchedulingModal from "../components/scheduling/SchedulingModal";
 import { createEmptySchedulingForm } from "../data/mockData";
 import { buildDateTime } from "../utils/dateTime";
-import { fetchClients, fetchAdvisors, fetchMeetings, scheduleMeeting } from "../api/meetingApi";
+import {
+  fetchClients,
+  fetchAdvisors,
+  fetchMeetings,
+  scheduleMeeting,
+  fetchAvailableAgents,
+  AgentOption,
+} from "../api/meetingApi";
 import { useAuth } from "../hooks/useAuth.js";
 
 function meetingRecordToRow(m: any) {
@@ -52,6 +59,7 @@ export default function SchedulingPage() {
   const [form, setForm] = useState<any>(createEmptySchedulingForm);
   const [clientOptions, setClientOptions] = useState<any[]>([]);
   const [advisorOptions, setAdvisorOptions] = useState<any[]>([]);
+  const [agentOptions, setAgentOptions] = useState<AgentOption[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -67,7 +75,22 @@ export default function SchedulingPage() {
     fetchAdvisors()
       .then((data) => setAdvisorOptions(data))
       .catch(() => {});
+    fetchAvailableAgents()
+      .then((data) => setAgentOptions(data))
+      .catch(() => {});
   }, []);
+
+  function toggleSelectedAgent(name: string) {
+    setForm((current: any) => {
+      const has = (current.selectedAgents || []).includes(name);
+      return {
+        ...current,
+        selectedAgents: has
+          ? current.selectedAgents.filter((a: string) => a !== name)
+          : [...(current.selectedAgents || []), name],
+      };
+    });
+  }
 
   function handleFieldChange(fieldId: any, value: any) {
     setForm((current: any) => ({ ...current, [fieldId]: value }));
@@ -115,6 +138,7 @@ export default function SchedulingPage() {
         member: form.member || form.bookedBy || "",
         guests: form.guests || [],
         notes: form.detailsHappened || "",
+        agents_to_use: form.selectedAgents || [],
       });
 
       // Refresh list from service so the new meeting appears with its real ID
@@ -195,6 +219,8 @@ export default function SchedulingPage() {
           onToggleAdvisor={handleAdvisorToggle}
           onAddGuest={handleAddGuest}
           onRemoveGuest={handleRemoveGuest}
+          agentOptions={agentOptions}
+          onToggleAgent={toggleSelectedAgent}
           onClose={() => {
             setIsModalOpen(false);
             setForm(createEmptySchedulingForm());
