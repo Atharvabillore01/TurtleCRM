@@ -91,6 +91,19 @@ export interface ScheduleMeetingPayload {
   member: string;
   guests: string[];
   notes: string;
+  agents_to_use?: string[];
+}
+
+export interface AgentOption {
+  name: string;
+  touch_point: string;
+  phase: number;
+}
+
+export async function fetchAvailableAgents(): Promise<AgentOption[]> {
+  const res = await fetch(`${BASE_URL}/api/meetings/agents`);
+  if (!res.ok) throw new Error(`meeting-service agents ${res.status}`);
+  return res.json();
 }
 
 export async function fetchClients(): Promise<ClientOption[]> {

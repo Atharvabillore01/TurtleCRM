@@ -21,6 +21,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request, status
 
 from config import settings
+from db.meeting_procs import proc_find_meeting_by_meet_url
 from eventbus import publish_event
 from firefly_client import FireflyClient
 from logger import get_logger
@@ -177,7 +178,18 @@ async def _handle_transcript_ready(firefly_meeting_id: str) -> None:
     transcript_url = result["transcript_url"]
     duration = result["duration"]
 
-    ctx = _lookup_meeting_context(meet_url)
+    # Prefer a real scheduled meeting row (carries ops-selected agents_to_use).
+    # Fall back to ALLOWED_MEETINGS only for ad-hoc/test meetings without a row.
+    meeting_row = proc_find_meeting_by_meet_url(meet_url)
+    if meeting_row is not None:
+        ctx = {
+            "meeting_id":    meeting_row.id,
+            "client_id":     meeting_row.client_id,
+            "agenda":        meeting_row.agenda,
+            "agents_to_use": list(meeting_row.agents_to_use or []),
+        }
+    else:
+        ctx = _lookup_meeting_context(meet_url)
     if ctx is None:
         logger.info("firefly_transcript_skipped_meet_url_filter", extra={
             "firefly_meeting_id": firefly_meeting_id,

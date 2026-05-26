@@ -20,6 +20,21 @@ router = APIRouter(prefix="/api/meetings", tags=["meetings"])
 logger = get_logger("meeting-service")
 
 
+# Canonical list of CRM-agent agents available for ops to assign at scheduling time.
+# Keep in sync with turtle-crm-agent/agents/__init__.py.
+AVAILABLE_AGENTS: list[dict] = [
+    {"name": "DemographicsAgent",  "touch_point": "Demographics & Family",       "phase": 1},
+    {"name": "FinanceAgent",       "touch_point": "Finances",                    "phase": 1},
+    {"name": "GoalsAgent",         "touch_point": "Life Goals",                  "phase": 1},
+    {"name": "ProfessionalAgent",  "touch_point": "Professional Details",        "phase": 1},
+    {"name": "ScheduleAgent",      "touch_point": "Schedule & Communication",    "phase": 1},
+    {"name": "QualitativeAgent",   "touch_point": "Qualitative Parameters",      "phase": 1},
+    {"name": "TaskAgent",          "touch_point": "Task Priority",               "phase": 2},
+    {"name": "FeedbackAgent",      "touch_point": "Custom Fields",               "phase": 3},
+    {"name": "SystemResolver",     "touch_point": "Turtle ID",                   "phase": 0},
+]
+
+
 class ScheduleMeetingRequest(BaseModel):
     client_id: str
     advisor_id: str
@@ -40,7 +55,15 @@ class ScheduleMeetingRequest(BaseModel):
     member: str = ""
     guests: list[str] = []
     notes: str = ""
+    # Ops-selected agents to run on the post-meeting transcript. Empty = run all.
+    agents_to_use: list[str] = []
 
+
+
+@router.get("/agents")
+async def list_available_agents():
+    """List CRM-agent agents that ops can assign to a meeting at scheduling time."""
+    return AVAILABLE_AGENTS
 
 
 @router.get("/")
@@ -69,6 +92,7 @@ async def schedule_meeting(req: ScheduleMeetingRequest):
         guests=req.guests,
         notes=req.notes,
         meeting_url=req.meeting_url,
+        agents_to_use=req.agents_to_use,
     )
 
     # ── Step 1: auto-create Google Meet + send calendar invites ─────────────────

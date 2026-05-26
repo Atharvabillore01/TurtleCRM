@@ -1066,5 +1066,6 @@ export function createEmptySchedulingForm() {
     detailsHappened: "",
     member: "",
     status: "Upcoming",
+    selectedAgents: [],
   };
 }
