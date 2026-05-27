@@ -7,7 +7,10 @@ class Settings(BaseSettings):
     node_env: str = "development"
     auth_service_port: int = 4000
 
-    database_url: str = "postgresql://devadmin:StrongPassword123!@13.207.65.145:5432/qadb_turtle01"
+    # DATABASE_URL must be provided via env (.env or container). Empty default
+    # so a missing value fails fast at pool init rather than silently using a
+    # hardcoded credential committed to source.
+    database_url: str = ""
     redis_url: str = "redis://localhost:6379"
     redis_password: str = "changeme"
 

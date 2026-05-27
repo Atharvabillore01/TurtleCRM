@@ -64,15 +64,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (secs <= 0) return;
     refreshTimerRef.current = setTimeout(async () => {
       try {
-        const res = await fetch("http://localhost:4000/auth/refresh", {
-          method:      "POST",
-          credentials: "include",
-          headers:     { "Content-Type": "application/json" },
-          body:        JSON.stringify({}),
-        });
-        if (!res.ok) throw new Error();
-        const data = (await res.json()) as { accessToken: string };
-        login(data.accessToken);
+        const res = await authAxios.post<{ accessToken: string }>("/auth/refresh", {});
+        login(res.data.accessToken);
       } catch {
         setAccessToken(null);
         setAxiosToken(null);
@@ -99,12 +92,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     clearTimer();
     try {
-      await fetch("http://localhost:4000/auth/logout", {
-        method:      "POST",
-        credentials: "include",
-        headers:     { "Content-Type": "application/json" },
-        body:        JSON.stringify({}),
-      });
+      await authAxios.post("/auth/logout", {});
     } catch { /* best-effort */ }
     setAccessToken(null);
     setAxiosToken(null);
