@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     node_env: str = "development"
     notification_service_port: int = 4003
     rabbitmq_url: str = "amqp://turtle:changeme@localhost:5672"
+    redis_url: str = "redis://localhost:6379"
     sendgrid_api_key: str = ""
     sendgrid_from_email: str = "noreply@turtlecorporate.com"
     sendgrid_from_name: str = "Turtle Corporate"

@@ -49,6 +49,22 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="otp-service", lifespan=lifespan)
 
+try:
+    from tracing import setup_tracing
+    setup_tracing(app, "otp-service")
+except ImportError:
+    pass
+
+try:
+    from metrics import metrics_middleware, metrics_endpoint
+    app.middleware("http")(metrics_middleware)
+
+    @app.get("/metrics", include_in_schema=False)
+    async def _metrics():
+        return await metrics_endpoint()
+except ImportError:
+    pass
+
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):

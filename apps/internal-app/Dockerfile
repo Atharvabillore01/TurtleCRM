@@ -23,7 +23,14 @@ COPY apps/internal-app/tailwind.config.js  ./apps/internal-app/tailwind.config.j
 COPY apps/internal-app/postcss.config.js   ./apps/internal-app/postcss.config.js
 
 ARG VITE_AUTH_SERVICE_URL=http://localhost:4000
+ARG VITE_USER_SERVICE_URL=http://localhost:4002
+ARG VITE_MEETING_SERVICE_URL=http://localhost:4004
+ARG VITE_SHOW_DEV_TOGGLE=false
+
 ENV VITE_AUTH_SERVICE_URL=$VITE_AUTH_SERVICE_URL
+ENV VITE_USER_SERVICE_URL=$VITE_USER_SERVICE_URL
+ENV VITE_MEETING_SERVICE_URL=$VITE_MEETING_SERVICE_URL
+ENV VITE_SHOW_DEV_TOGGLE=$VITE_SHOW_DEV_TOGGLE
 
 WORKDIR /repo/apps/internal-app
 RUN npm run build

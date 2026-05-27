@@ -10,6 +10,7 @@ from pydantic import BaseModel, field_validator
 
 from redis_client import get_redis
 from eventbus import publish_event
+from outbox import write_outbox_event
 from config import settings
 from auth_utils import verify_otp_with_service, issue_tokens, set_token_cookies, mask
 from logger import get_logger
@@ -179,14 +180,20 @@ async def advisor_request_otp(body: AdvisorRequestOTPBody):
         json.dumps({"channel": body.channel, "destination": body.destination, "verified": False}),
     )
 
-    await publish_event("auth.otp.requested", {
-        "topic": "auth.otp.requested",
-        "userId": body.destination,
-        "channel": body.channel,
-        "target": body.destination,
-        "userType": "advisor",
-        "requestedAt": datetime.now(timezone.utc).isoformat(),
-    })
+    await write_outbox_event(
+        aggregate_type="OTP",
+        aggregate_id=body.destination,
+        event_type="auth.otp.requested",
+        payload={
+            "topic": "auth.otp.requested",
+            "userId": body.destination,
+            "channel": body.channel,
+            "target": body.destination,
+            "userType": "advisor",
+            "requestedAt": datetime.now(timezone.utc).isoformat(),
+        },
+        metadata={"requestId": request_id},
+    )
 
     logger.info(
         "advisor_otp_requested",
@@ -257,14 +264,20 @@ async def advisor_login(body: AdvisorLoginBody, request: Request):
         }),
     )
 
-    await publish_event("auth.otp.requested", {
-        "topic": "auth.otp.requested",
-        "userId": advisor["id"],
-        "channel": advisor["otpChannel"],
-        "target": advisor["otpTarget"],
-        "userType": "advisor",
-        "requestedAt": datetime.now(timezone.utc).isoformat(),
-    })
+    await write_outbox_event(
+        aggregate_type="OTP",
+        aggregate_id=advisor["id"],
+        event_type="auth.otp.requested",
+        payload={
+            "topic": "auth.otp.requested",
+            "userId": advisor["id"],
+            "channel": advisor["otpChannel"],
+            "target": advisor["otpTarget"],
+            "userType": "advisor",
+            "requestedAt": datetime.now(timezone.utc).isoformat(),
+        },
+        metadata={"sessionId": session_id},
+    )
 
     logger.info(
         "advisor_otp_dispatched",

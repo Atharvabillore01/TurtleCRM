@@ -1,68 +1,47 @@
-import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { TurtleLogo, LoadingSpinner } from "@turtle/ui";
 import { useAuth } from "../hooks/useAuth.js";
 
 export function DashboardPage() {
-  const { logout, email, name } = useAuth();
-  const navigate                = useNavigate();
-  const [loggingOut, setOut]    = useState(false);
-
-  async function handleLogout() {
-    setOut(true);
-    await logout();
-    navigate("/", { replace: true });
-  }
+  const { email, name } = useAuth();
+  const navigate        = useNavigate();
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <TurtleLogo size={34} />
-          <span className="text-xs font-medium text-gray-400 border-l border-gray-200 pl-3">
-            Internal Portal
-          </span>
-        </div>
-        <div className="flex items-center gap-3">
-          {email && (
-            <span className="text-xs text-gray-500 hidden sm:block">{email}</span>
-          )}
-          <button
-            type="button"
-            onClick={handleLogout}
-            disabled={loggingOut}
-            aria-busy={loggingOut}
-            className="flex items-center gap-2 text-sm font-medium text-gray-500 hover:text-red-600 transition-colors disabled:opacity-50"
-          >
-            {loggingOut && <LoadingSpinner size={14} label="" />}
-            {loggingOut ? "Signing out…" : "Sign out"}
-          </button>
-        </div>
-      </header>
-
-      <main className="max-w-3xl mx-auto px-4 py-12">
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
-          <div className="flex items-center gap-4 mb-6">
-            <div className="w-14 h-14 rounded-full bg-brand-50 flex items-center justify-center text-2xl">
-              🐢
-            </div>
-            <div>
-              <h1 className="text-xl font-bold text-gray-900">
-                Welcome{name ? `, ${name}` : ""}
-              </h1>
-              <p className="text-xs text-gray-400 mt-0.5">
-                {email ?? "Internal Team Member"} · Securely signed in
-              </p>
-            </div>
+    <div className="max-w-3xl mx-auto px-6 py-10">
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8">
+        <div className="flex items-center gap-4 mb-6">
+          <div className="w-12 h-12 rounded-full bg-gray-100 flex items-center justify-center text-2xl">
+            🐢
           </div>
-
-          <div className="border-t border-gray-100 pt-6">
-            <p className="text-sm text-gray-500">
-              This is the Turtle Corporate internal team portal. Your tools and content will appear here.
+          <div>
+            <h1 className="text-xl font-bold text-gray-900">
+              Welcome{name ? `, ${name}` : ""}
+            </h1>
+            <p className="text-xs text-gray-400 mt-0.5">
+              {email ?? "Internal Team Member"} · Securely signed in
             </p>
           </div>
         </div>
-      </main>
+
+        <div className="border-t border-gray-100 pt-6 space-y-2">
+          <p className="text-sm text-gray-500 mb-4">
+            Turtle Corporate internal team portal. Select a tool from the sidebar.
+          </p>
+
+          <button
+            type="button"
+            onClick={() => navigate("/dashboard/ai-validation")}
+            className="w-full flex items-center justify-between border border-gray-100 rounded-xl px-5 py-4 hover:border-gray-300 hover:bg-gray-50 transition-colors text-left group"
+          >
+            <div>
+              <p className="text-sm font-medium text-gray-800">AI Field Autofill</p>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Extract CRM fields from call transcripts
+              </p>
+            </div>
+            <span className="text-gray-300 group-hover:text-gray-500 transition-colors text-lg">→</span>
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

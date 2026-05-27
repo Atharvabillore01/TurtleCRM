@@ -8,8 +8,10 @@ from pydantic import BaseModel, field_validator
 
 from redis_client import get_redis
 from eventbus import publish_event
+from outbox import write_outbox_event
 from config import settings
 from auth_utils import verify_otp_with_service, issue_tokens, set_token_cookies, mask
+from utils.rate_limiter import RateLimiter
 from logger import get_logger
 
 router = APIRouter(prefix="/auth/client", tags=["client"])
@@ -55,20 +57,36 @@ async def request_otp(body: RequestOTPBody):
     request_id = str(uuid.uuid4())
     r = get_redis()
 
+    rate = await RateLimiter(r).check(
+        key="otp_request",
+        max_requests=3,
+        window_seconds=900,
+        identifier=body.destination,
+    )
+    if not rate.allowed:
+        logger.warning("otp_rate_limited", extra={"destination": mask(body.destination), "retry_after": rate.retry_after})
+        raise HTTPException(429, detail=f"Too many OTP requests. Try again in {rate.retry_after}s")
+
     await r.setex(
         f"otp:pending:{request_id}",
         settings.otp_expires_in_seconds,
         json.dumps({"channel": body.channel, "destination": body.destination, "verified": False}),
     )
 
-    await publish_event("auth.otp.requested", {
-        "topic": "auth.otp.requested",
-        "userId": body.destination,
-        "channel": body.channel,
-        "target": body.destination,
-        "userType": "client",
-        "requestedAt": datetime.now(timezone.utc).isoformat(),
-    })
+    await write_outbox_event(
+        aggregate_type="OTP",
+        aggregate_id=body.destination,
+        event_type="auth.otp.requested",
+        payload={
+            "topic": "auth.otp.requested",
+            "userId": body.destination,
+            "channel": body.channel,
+            "target": body.destination,
+            "userType": "client",
+            "requestedAt": datetime.now(timezone.utc).isoformat(),
+        },
+        metadata={"requestId": request_id},
+    )
 
     logger.info(
         "otp_requested",

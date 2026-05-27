@@ -6,13 +6,15 @@ import React, {
   useRef,
   type ReactNode,
 } from "react";
-import { setAxiosToken } from "../api/axios.js";
+import { authAxios, setAxiosToken } from "../api/axios.js";
 import type { JWTPayload } from "@turtle/types";
 
 interface AuthState {
   accessToken:     string | null;
   isAuthenticated: boolean;
+  isLoading:       boolean;
   userType:        "internal";
+  userId:          string | null;
   email:           string | null;
   name:            string | null;
 }
@@ -46,8 +48,10 @@ function secondsUntilExpiry(token: string): number {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [accessToken, setAccessToken] = useState<string | null>(null);
+  const [userId,      setUserId]      = useState<string | null>(null);
   const [email,       setEmail]       = useState<string | null>(null);
   const [name,        setName]        = useState<string | null>(null);
+  const [isLoading,   setIsLoading]   = useState<boolean>(true);
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const clearTimer = () => {
@@ -72,6 +76,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch {
         setAccessToken(null);
         setAxiosToken(null);
+        setUserId(null);
         setEmail(null);
         setName(null);
       }
@@ -83,6 +88,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const payload = parseJWT(token);
       setAccessToken(token);
       setAxiosToken(token);
+      setUserId(payload?.userId ?? null);
       setEmail(payload?.email ?? null);
       setName(payload?.name ?? null);
       scheduleRefresh(token);
@@ -104,22 +110,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAxiosToken(null);
     setEmail(null);
     setName(null);
+    setUserId(null);
   }, []);
 
+  // On mount: attempt silent refresh to restore session from httpOnly cookie.
+  // isLoading stays true until this resolves so ProtectedRoute doesn't flash-redirect.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("http://localhost:4000/auth/refresh", {
-          method:      "POST",
-          credentials: "include",
-          headers:     { "Content-Type": "application/json" },
-          body:        JSON.stringify({}),
-        });
-        if (!res.ok || cancelled) return;
-        const data = (await res.json()) as { accessToken: string };
-        login(data.accessToken);
-      } catch { /* no valid session */ }
+        const res = await authAxios.post<{ accessToken: string }>("/auth/refresh", {});
+        if (cancelled) return;
+        login(res.data.accessToken);
+      } catch (err: unknown) {
+        // 401 → stale/orphaned refresh cookie. Clear it server-side so the
+        // next page load doesn't repeat the same failed refresh.
+        const status = (err as { response?: { status?: number } })?.response?.status;
+        if (status === 401) {
+          await authAxios.post("/auth/logout", {}).catch(() => { /* best-effort */ });
+        }
+      } finally {
+        if (!cancelled) setIsLoading(false);
+      }
     })();
     return () => { cancelled = true; clearTimer(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -129,7 +141,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       value={{
         accessToken,
         isAuthenticated: !!accessToken && !isTokenExpired(accessToken),
+        isLoading,
         userType:        "internal",
+        userId,
         email,
         name,
         login,

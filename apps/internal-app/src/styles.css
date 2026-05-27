@@ -1,0 +1,147 @@
+@import url("https://fonts.googleapis.com/css2?family=Comfortaa:wght@500;700&family=Montserrat:wght@600;700&family=Open+Sans:wght@400;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    min-width: 320px;
+    background:
+      radial-gradient(circle at top left, rgba(46, 222, 190, 0.18), transparent 30%),
+      linear-gradient(145deg, rgba(46, 222, 190, 0.09), transparent 36%),
+      linear-gradient(315deg, rgba(29, 29, 29, 0.04), transparent 30%),
+      #ffffff;
+    color: #1d1d1d;
+    font-family: "Open Sans", sans-serif;
+    scrollbar-width: none;
+  }
+
+  html {
+    scrollbar-width: none;
+  }
+
+  * {
+    scrollbar-width: none;
+  }
+
+  *::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  textarea {
+    resize: vertical;
+  }
+
+  h1 {
+    margin: 0;
+    margin-top: 4px;
+    letter-spacing: 0;
+    font-size: 38px;
+    line-height: 1.08;
+    font-family: "Comfortaa", sans-serif;
+  }
+
+  h2 {
+    margin: 0;
+    letter-spacing: 0;
+    font-size: 17px;
+    font-family: "Montserrat", sans-serif;
+  }
+
+  select {
+    min-height: 40px;
+    padding: 0 34px 0 12px;
+    border: 1px solid #d7efea;
+    border-radius: 8px;
+    background: #ffffff;
+    color: #1d1d1d;
+  }
+
+  th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    height: 42px;
+    background: #f3fffb;
+    color: #5f5f5f;
+    font-size: 11px;
+    text-align: left;
+    text-transform: uppercase;
+    font-family: "Montserrat", sans-serif;
+  }
+
+  td,
+  th {
+    padding: 0 14px;
+    border-bottom: 1px solid #d7efea;
+  }
+
+  td {
+    padding-top: 14px;
+    padding-bottom: 14px;
+    vertical-align: top;
+    font-size: 13px;
+  }
+
+  td:first-child strong,
+  td:first-child > span {
+    display: block;
+  }
+
+  td:first-child strong {
+    line-height: 1.35;
+  }
+
+  td:first-child > span {
+    margin-top: 3px;
+    color: #5f5f5f;
+    font-size: 11px;
+    overflow-wrap: anywhere;
+  }
+
+  tr.is-null {
+    background: #fffdfd;
+  }
+
+  .form-field input:focus,
+  .form-field textarea:focus,
+  .form-field select:focus {
+    border-color: rgba(46, 222, 190, 0.78);
+    box-shadow: 0 0 0 3px rgba(46, 222, 190, 0.14);
+  }
+
+  .scrollbar-hidden::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+
+  @media (max-width: 760px) {
+    h1 {
+      font-size: 30px;
+    }
+
+    td,
+    th {
+      padding-left: 10px;
+      padding-right: 10px;
+    }
+  }
+}

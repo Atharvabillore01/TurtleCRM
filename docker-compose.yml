@@ -1,8 +1,24 @@
-version: "3.9"
-
 services:
 
   # ─── Infrastructure ────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-turtle}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-changeme}
+      POSTGRES_DB: ${POSTGRES_DB:-turtle_corporate}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-turtle} -d ${POSTGRES_DB:-turtle_corporate}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   redis:
     image: redis:7-alpine
@@ -32,10 +48,12 @@ services:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
+      interval: 15s
+      timeout: 15s
+      retries: 10
+      # RabbitMQ on Windows/WSL2 Docker Desktop can take 3–5 min to boot
+      # because Erlang does many small file ops on a slow shared filesystem.
+      start_period: 300s
 
   # ─── Backend Services ──────────────────────────────────────────────────────
 
@@ -44,17 +62,20 @@ services:
       context: .
       dockerfile: services/auth-service/Dockerfile
     restart: unless-stopped
+    stop_grace_period: 45s
     ports:
       - "4000:4000"
     env_file: .env
     environment:
       NODE_ENV: production
+      FORCE_COLOR: "1"
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       RABBITMQ_URL: amqp://turtle:${RABBITMQ_PASS:-changeme}@rabbitmq:5672
       AUTH_SERVICE_URL: http://auth-service:4000
       OTP_SERVICE_URL: http://otp-service:4001
       USER_SERVICE_URL: http://user-service:4002
       NOTIFICATION_SERVICE_URL: http://notification-service:4003
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318/v1/traces
     volumes:
       - ./logs/auth-service:/app/logs
       - ./logs/combined:/app/logs/combined
@@ -65,23 +86,26 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health')\""]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
+      interval: 20s
+      timeout: 30s
+      retries: 10
+      start_period: 90s
 
   otp-service:
     build:
       context: .
       dockerfile: services/otp-service/Dockerfile
     restart: unless-stopped
+    stop_grace_period: 45s
     ports:
       - "4001:4001"
     env_file: .env
     environment:
       NODE_ENV: production
+      FORCE_COLOR: "1"
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
       RABBITMQ_URL: amqp://turtle:${RABBITMQ_PASS:-changeme}@rabbitmq:5672
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318/v1/traces
     volumes:
       - ./logs/otp-service:/app/logs
       - ./logs/combined:/app/logs/combined
@@ -92,10 +116,10 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4001/health')\""]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
+      interval: 20s
+      timeout: 30s
+      retries: 10
+      start_period: 90s
 
   user-service:
     build:
@@ -107,39 +131,99 @@ services:
     env_file: .env
     environment:
       NODE_ENV: production
+      FORCE_COLOR: "1"
+      RABBITMQ_URL: amqp://turtle:${RABBITMQ_PASS:-changeme}@rabbitmq:5672
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
     volumes:
       - ./logs/user-service:/app/logs
       - ./logs/combined:/app/logs/combined
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4002/health')\""]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
+      interval: 20s
+      timeout: 30s
+      retries: 10
+      start_period: 90s
 
   notification-service:
     build:
       context: .
       dockerfile: services/notification-service/Dockerfile
     restart: unless-stopped
+    stop_grace_period: 45s
     ports:
       - "4003:4003"
     env_file: .env
     environment:
       NODE_ENV: production
+      FORCE_COLOR: "1"
       RABBITMQ_URL: amqp://turtle:${RABBITMQ_PASS:-changeme}@rabbitmq:5672
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4318/v1/traces
     volumes:
       - ./logs/notification-service:/app/logs
       - ./logs/combined:/app/logs/combined
     depends_on:
+      redis:
+        condition: service_healthy
       rabbitmq:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4003/health')\""]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
+      interval: 20s
+      timeout: 30s
+      retries: 10
+      start_period: 90s
+
+  # outbox-publisher: disabled — direct publish in outbox.py handles delivery in stub mode.
+  # Re-enable when real sp_poll_unpublished_events proc + real DB are in place.
+
+  meeting-service:
+    build:
+      context: .
+      dockerfile: services/meeting-service/Dockerfile
+    restart: unless-stopped
+    stop_grace_period: 45s
+    ports:
+      - "4004:4004"
+    env_file: .env
+    environment:
+      FORCE_COLOR: "1"
+      RABBITMQ_URL: amqp://turtle:${RABBITMQ_PASS:-changeme}@rabbitmq:5672
+      REDIS_URL: redis://:${REDIS_PASSWORD:-changeme}@redis:6379
+      MEETING_SERVICE_PORT: "4004"
+      FIREFLY_API_KEY: ${FIREFLY_API_KEY:-}
+      FIREFLY_WEBHOOK_SECRET: ${FIREFLY_WEBHOOK_SECRET:-}
+      FIREFLY_BOT_EMAIL: ${FIREFLY_BOT_EMAIL:-}
+      CRM_AI_SERVICE_URL: ${CRM_AI_SERVICE_URL:-http://host.docker.internal:5000}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      GOOGLE_SERVICE_ACCOUNT_FILE: /app/secrets/gcp-sa.json
+      GOOGLE_IMPERSONATE_EMAIL: ${GOOGLE_IMPERSONATE_EMAIL:-}
+      GOOGLE_CALENDAR_ID: ${GOOGLE_CALENDAR_ID:-primary}
+      GOOGLE_CALENDAR_TIMEZONE: ${GOOGLE_CALENDAR_TIMEZONE:-Asia/Kolkata}
+    volumes:
+      - ./logs/meeting-service:/app/logs
+      - ./secrets/gcp-sa.json:/app/secrets/gcp-sa.json:ro
+      - ./transcripts:/app/transcripts
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4004/health')\""]
+      interval: 20s
+      timeout: 30s
+      retries: 10
+      start_period: 90s
+
+  # crm-agent is deployed separately (its own repo + host). Point meeting-service
+  # at it via the CRM_AI_SERVICE_URL env var.
 
   # ─── Frontend Apps ─────────────────────────────────────────────────────────
 
@@ -189,13 +273,17 @@ services:
     build:
       context: .
       dockerfile: apps/internal-app/Dockerfile
+      args:
+        VITE_AUTH_SERVICE_URL: http://localhost:4000
+        VITE_USER_SERVICE_URL: http://localhost:4002
+        VITE_MEETING_SERVICE_URL: http://localhost:4004
+        VITE_SHOW_DEV_TOGGLE: ${VITE_SHOW_DEV_TOGGLE:-true}
     restart: unless-stopped
     ports:
       - "3002:3002"
     env_file: .env
     environment:
       NODE_ENV: production
-      VITE_AUTH_SERVICE_URL: http://localhost:4000
     depends_on:
       auth-service:
         condition: service_healthy
@@ -206,6 +294,63 @@ services:
       retries: 3
       start_period: 30s
 
+  # ─── Observability Stack ───────────────────────────────────────────────────
+
+  tempo:
+    image: grafana/tempo:latest
+    command: ["-config.file=/etc/tempo.yaml"]
+    user: "0"
+    volumes:
+      - ./monitoring/tempo.yaml:/etc/tempo.yaml
+      - tempo_data:/var/tempo
+    ports:
+      - "3200:3200"   # Tempo HTTP API
+      - "4318:4318"   # OTLP HTTP receiver
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./monitoring/prometheus/alerts.yml:/etc/prometheus/alerts.yml
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+    volumes:
+      - ./monitoring/alertmanager.yml:/etc/alertmanager/alertmanager.yml
+    ports:
+      - "9093:9093"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3030:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    depends_on:
+      - prometheus
+      - tempo
+    restart: unless-stopped
+
 volumes:
+  postgres_data:
   redis_data:
   rabbitmq_data:
+  tempo_data:
+  prometheus_data:
+  grafana_data:
