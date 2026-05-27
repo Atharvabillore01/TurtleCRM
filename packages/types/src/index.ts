@@ -1,11 +1,13 @@
 // ─── Enums ────────────────────────────────────────────────────────────────────
 
 export enum KafkaTopics {
-  OTPRequested     = "auth.otp.requested",
-  OTPVerified      = "auth.otp.verified",
-  LoginSuccess     = "auth.login.success",
-  LoginFailed      = "auth.login.failed",
-  TokenRefreshed   = "auth.token.refreshed",
+  OTPRequested        = "auth.otp.requested",
+  OTPVerified         = "auth.otp.verified",
+  LoginSuccess        = "auth.login.success",
+  LoginFailed         = "auth.login.failed",
+  TokenRefreshed      = "auth.token.refreshed",
+  CRMFieldsExtracted  = "crm.fields.extracted",
+  CallTranscriptReady = "call.transcript.ready",
 }
 
 // ─── Primitives ───────────────────────────────────────────────────────────────
@@ -105,3 +107,26 @@ export type AuthEvent =
   | LoginSuccessEvent
   | LoginFailedEvent
   | TokenRefreshedEvent;
+
+// ─── CRM Event Payloads ───────────────────────────────────────────────────────
+
+export interface ExtractedCRMField {
+  value:      string;
+  confidence: number; // 0–1
+}
+
+export interface CRMFieldsExtractedEvent {
+  topic:           KafkaTopics.CRMFieldsExtracted;
+  clientId:        string;
+  clientName:      string;
+  extractedFields: Record<string, ExtractedCRMField>;
+  timestamp:       string; // ISO
+}
+
+export interface CallTranscriptReadyEvent {
+  topic:       KafkaTopics.CallTranscriptReady;
+  clientId:    string;
+  clientName:  string;
+  transcript:  string;
+  timestamp:   string; // ISO
+}

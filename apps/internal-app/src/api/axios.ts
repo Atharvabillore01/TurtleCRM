@@ -3,7 +3,9 @@ import axios, {
   type InternalAxiosRequestConfig,
 } from "axios";
 
-const BASE_URL = import.meta.env["VITE_AUTH_SERVICE_URL"] ?? "http://localhost:4000";
+const BASE_URL         = import.meta.env["VITE_AUTH_SERVICE_URL"]    ?? "http://localhost:4000";
+const USER_BASE_URL    = import.meta.env["VITE_USER_SERVICE_URL"]    ?? "http://localhost:4002";
+const MEETING_BASE_URL = import.meta.env["VITE_MEETING_SERVICE_URL"] ?? "http://localhost:4004";
 
 let _accessToken: string | null = null;
 let _isRefreshing = false;
@@ -25,6 +27,37 @@ export const authAxios: AxiosInstance = axios.create({
 });
 
 authAxios.interceptors.request.use(
+  (config: InternalAxiosRequestConfig) => {
+    if (_accessToken) config.headers.set("Authorization", `Bearer ${_accessToken}`);
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
+
+// ─── User-service axios (plain Bearer, no refresh retry needed) ───────────────
+
+export const userAxios: AxiosInstance = axios.create({
+  baseURL: USER_BASE_URL,
+  headers: { "Content-Type": "application/json" },
+});
+
+userAxios.interceptors.request.use(
+  (config: InternalAxiosRequestConfig) => {
+    if (_accessToken) config.headers.set("Authorization", `Bearer ${_accessToken}`);
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
+
+// ─── Meeting-service axios (Bearer + cookie credentials) ──────────────────────
+
+export const meetingAxios: AxiosInstance = axios.create({
+  baseURL:         MEETING_BASE_URL,
+  withCredentials: true,
+  headers:         { "Content-Type": "application/json" },
+});
+
+meetingAxios.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
     if (_accessToken) config.headers.set("Authorization", `Bearer ${_accessToken}`);
     return config;

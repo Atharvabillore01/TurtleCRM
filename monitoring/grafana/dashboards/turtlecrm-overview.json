@@ -1,0 +1,53 @@
+{
+  "title": "TurtleCRM Overview",
+  "uid": "turtlecrm-overview",
+  "schemaVersion": 36,
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Request Rate (req/s)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0},
+      "targets": [{"expr": "sum(rate(http_requests_total[5m])) by (job)", "legendFormat": "{{job}}"}]
+    },
+    {
+      "id": 2,
+      "title": "P95 Latency (s)",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0},
+      "targets": [{"expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))", "legendFormat": "P95"}]
+    },
+    {
+      "id": 3,
+      "title": "Error Rate",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8},
+      "targets": [{"expr": "sum(rate(http_requests_total{status=~\"5..\"}[5m])) / sum(rate(http_requests_total[5m]))", "legendFormat": "Error Rate"}]
+    },
+    {
+      "id": 4,
+      "title": "Events Published / Consumed",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8},
+      "targets": [
+        {"expr": "sum(rate(events_published_total[5m])) by (event_type)", "legendFormat": "published {{event_type}}"},
+        {"expr": "sum(rate(events_consumed_total[5m])) by (event_type)", "legendFormat": "consumed {{event_type}}"}
+      ]
+    },
+    {
+      "id": 5,
+      "title": "RabbitMQ Queue Depth",
+      "type": "timeseries",
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+      "targets": [{"expr": "rabbitmq_queue_messages_ready", "legendFormat": "{{queue}}"}]
+    },
+    {
+      "id": 6,
+      "title": "Service Up/Down",
+      "type": "stat",
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+      "targets": [{"expr": "up", "legendFormat": "{{job}}"}]
+    }
+  ]
+}

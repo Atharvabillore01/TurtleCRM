@@ -1,31 +1,65 @@
+import asyncio
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request, Depends
-from pydantic import BaseModel
-from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession
 import bcrypt as bcrypt_lib
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
 from config import settings
-from database import get_db, create_tables
-from models import User, Advisor
+from consumer import start_consumers
+from eventbus import disconnect_publisher
+from db.user_procs import register_user_mocks
+from db.user_procs import (
+    proc_create_user,
+    proc_get_user,
+    proc_create_advisor,
+    proc_get_advisor_by_username,
+)
 from logger import get_logger
 
 logger = get_logger("user-service")
 
+_consumer_task: asyncio.Task | None = None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    await create_tables()
+    global _consumer_task
+    register_user_mocks()
+    _consumer_task = asyncio.create_task(start_consumers())
     logger.info("user-service started", extra={"env": settings.node_env})
     yield
+    if _consumer_task:
+        _consumer_task.cancel()
+        try:
+            await _consumer_task
+        except (asyncio.CancelledError, Exception):
+            pass
+    await disconnect_publisher()
     logger.info("user-service shut down")
 
 
 app = FastAPI(title="user-service", lifespan=lifespan)
 
+try:
+    from metrics import metrics_middleware, metrics_endpoint
+    app.middleware("http")(metrics_middleware)
+
+    @app.get("/metrics", include_in_schema=False)
+    async def _metrics():
+        return await metrics_endpoint()
+except ImportError:
+    pass
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3002", "http://localhost:3000", "http://localhost:3001"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
@@ -45,7 +79,7 @@ async def log_requests(request: Request, call_next):
     return response
 
 
-# ─── Users (clients) ──────────────────────────────────────────────────────────
+# ─── Users ────────────────────────────────────────────────────────────────────
 
 class CreateUserBody(BaseModel):
     phone: str | None = None
@@ -53,25 +87,20 @@ class CreateUserBody(BaseModel):
 
 
 @app.post("/users", status_code=201)
-async def create_user(body: CreateUserBody, db: AsyncSession = Depends(get_db)):
+async def create_user(body: CreateUserBody):
     if not body.phone and not body.email:
-        logger.warning("create_user_failed", extra={"reason": "missing_phone_and_email"})
         raise HTTPException(400, "phone or email is required")
-    user = User(phone=body.phone, email=body.email)
-    db.add(user)
-    await db.commit()
-    await db.refresh(user)
+
+    user = await proc_create_user(phone=body.phone, email=body.email)
     logger.info("user_created", extra={"user_id": user.id})
     return {"id": user.id, "phone": user.phone, "email": user.email}
 
 
 @app.get("/users/{user_id}")
-async def get_user(user_id: str, db: AsyncSession = Depends(get_db)):
-    user = await db.get(User, user_id)
+async def get_user(user_id: str):
+    user = await proc_get_user(user_id)
     if not user:
-        logger.warning("user_not_found", extra={"user_id": user_id})
         raise HTTPException(404, "User not found")
-    logger.debug("user_fetched", extra={"user_id": user_id})
     return {"id": user.id, "phone": user.phone, "email": user.email, "isActive": user.is_active}
 
 
@@ -86,34 +115,28 @@ class CreateAdvisorBody(BaseModel):
 
 
 @app.post("/advisors", status_code=201)
-async def create_advisor(body: CreateAdvisorBody, db: AsyncSession = Depends(get_db)):
-    hash_ = bcrypt_lib.hashpw(body.password.encode(), bcrypt_lib.gensalt()).decode()
-    advisor = Advisor(
-        username=body.username,
-        email=body.email,
-        password_hash=hash_,
-        otp_channel=body.otp_channel,
-        otp_target=body.otp_target,
-    )
-    db.add(advisor)
+async def create_advisor(body: CreateAdvisorBody):
+    password_hash = bcrypt_lib.hashpw(body.password.encode(), bcrypt_lib.gensalt()).decode()
     try:
-        await db.commit()
-    except IntegrityError:
-        await db.rollback()
+        advisor = await proc_create_advisor(
+            username=body.username,
+            email=body.email,
+            password_hash=password_hash,
+            otp_channel=body.otp_channel,
+            otp_target=body.otp_target,
+        )
+    except ValueError:
         raise HTTPException(409, "Username or email already exists")
-    await db.refresh(advisor)
+
     logger.info("advisor_created", extra={"advisor_id": advisor.id, "username": advisor.username})
     return {"id": advisor.id, "username": advisor.username, "email": advisor.email}
 
 
 @app.get("/advisors/by-username/{username}")
-async def get_advisor_by_username(username: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Advisor).where(Advisor.username == username))
-    advisor = result.scalar_one_or_none()
+async def get_advisor_by_username(username: str):
+    advisor = await proc_get_advisor_by_username(username)
     if not advisor:
-        logger.warning("advisor_not_found", extra={"username": username})
         raise HTTPException(404, "Advisor not found")
-    logger.debug("advisor_fetched", extra={"advisor_id": advisor.id, "username": username})
     return {
         "id": advisor.id,
         "username": advisor.username,

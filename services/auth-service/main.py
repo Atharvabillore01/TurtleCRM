@@ -15,21 +15,44 @@ from routes.advisor import router as advisor_router
 from routes.oauth import router as oauth_router
 from routes.refresh import router as refresh_router
 from logger import get_logger
+from db.outbox_procs import register_outbox_mocks
+from db.team_procs import register_team_mocks
+from db.pool import init_pool, close_pool
 
 logger = get_logger("auth-service")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    register_outbox_mocks()
+    register_team_mocks()
     logger.info("auth-service starting up", extra={"env": settings.node_env})
+    await init_pool(settings.database_url)
+    logger.info("db pool ready")
     await _get_exchange()
     logger.info("rabbitmq publisher connected")
     yield
     logger.info("auth-service shutting down")
-    await asyncio.gather(disconnect(), close_redis(), return_exceptions=True)
+    await asyncio.gather(disconnect(), close_redis(), close_pool(), return_exceptions=True)
 
 
 app = FastAPI(title="auth-service", lifespan=lifespan)
+
+try:
+    from tracing import setup_tracing
+    setup_tracing(app, "auth-service")
+except ImportError:
+    pass  # opentelemetry packages not installed — tracing disabled
+
+try:
+    from metrics import metrics_middleware, metrics_endpoint
+    app.middleware("http")(metrics_middleware)
+
+    @app.get("/metrics", include_in_schema=False)
+    async def _metrics():
+        return await metrics_endpoint()
+except ImportError:
+    pass  # prometheus_client not installed
 
 app.add_middleware(
     CORSMiddleware,
