@@ -12,6 +12,7 @@ COPY services/meeting-service/metrics.py             .
 COPY services/meeting-service/firefly_client.py      .
 COPY services/meeting-service/google_calendar_client.py .
 COPY services/meeting-service/redis_client.py        .
+COPY services/meeting-service/auth_dep.py            .
 COPY services/meeting-service/main.py                .
 COPY services/meeting-service/db/           ./db/
 COPY services/meeting-service/routes/       ./routes/

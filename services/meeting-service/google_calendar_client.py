@@ -131,16 +131,15 @@ def _create_event_sync(
 
 
 def _parse_datetime(value: str) -> datetime:
-    for fmt in (
-        "%Y-%m-%dT%H:%M:%S",
-        "%Y-%m-%dT%H:%M:%SZ",
-        "%Y-%m-%dT%H:%M:%S%z",
-        "%Y-%m-%dT%H:%M",
-        "%d-%m-%Y %I:%M %p",
-        "%d-%m-%Y %H:%M",
-    ):
+    s = value.strip()
+    # fromisoformat handles fractional seconds and offsets; normalise Z → +00:00.
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00"))
+    except ValueError:
+        pass
+    for fmt in ("%d-%m-%Y %I:%M %p", "%d-%m-%Y %H:%M"):
         try:
-            return datetime.strptime(value.strip(), fmt).replace(tzinfo=None)
+            return datetime.strptime(s, fmt).replace(tzinfo=None)
         except ValueError:
             continue
     raise ValueError(f"Cannot parse scheduled_at: {value!r}")

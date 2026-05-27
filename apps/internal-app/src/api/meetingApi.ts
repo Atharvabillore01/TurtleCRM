@@ -1,4 +1,4 @@
-const BASE_URL = (import.meta as any).env?.VITE_MEETING_SERVICE_URL ?? "http://localhost:4004";
+import { meetingAxios } from "./axios.js";
 
 export interface RawField {
   value: any;
@@ -21,6 +21,9 @@ export interface Extraction {
   duration_seconds: number;
   total_fields: number;
   raw_data: Record<string, RawField>;
+  // Optimistic-concurrency marker. Passed back to sp_patch_extraction_fields
+  // as expected_version on each edit; bumped on every successful patch.
+  version?: number;
   validated: boolean;
   validated_by: string | null;
   validated_at: string | null;
@@ -52,13 +55,15 @@ export interface MeetingRecord {
 }
 
 export async function fetchMeetings(): Promise<MeetingRecord[]> {
-  const res = await fetch(`${BASE_URL}/api/meetings/`);
-  if (!res.ok) throw new Error(`meeting-service meetings ${res.status}`);
-  return res.json();
+  const res = await meetingAxios.get<MeetingRecord[]>("/api/meetings/");
+  return res.data;
 }
 
 export interface ClientOption {
   id: string;
+  // client_users.id — what sp_schedule_meeting wants for meeting_attendees FK.
+  // `id` above is clients.id (lead row), kept for display/lookup compatibility.
+  client_user_id: string | null;
   name: string;
   email: string;
   segment: string;
@@ -66,6 +71,8 @@ export interface ClientOption {
 
 export interface AdvisorOption {
   id: string;
+  // adviser_users.id — used as the adviser attendee FK in sp_schedule_meeting.
+  adviser_user_id: string;
   name: string;
   email: string;
   specialization: string;
@@ -88,6 +95,9 @@ export interface ScheduleMeetingPayload {
   advisor_ids: string[];
   advisor_names: string[];
   advisor_emails: string[];
+  // Auth-side UUIDs the SP actually wires into meeting_attendees.
+  client_user_ids: string[];
+  adviser_user_ids: string[];
   member: string;
   guests: string[];
   notes: string;
@@ -101,57 +111,78 @@ export interface AgentOption {
 }
 
 export async function fetchAvailableAgents(): Promise<AgentOption[]> {
-  const res = await fetch(`${BASE_URL}/api/meetings/agents`);
-  if (!res.ok) throw new Error(`meeting-service agents ${res.status}`);
-  return res.json();
+  const res = await meetingAxios.get<AgentOption[]>("/api/meetings/agents");
+  return res.data;
 }
 
 export async function fetchClients(): Promise<ClientOption[]> {
-  const res = await fetch(`${BASE_URL}/api/clients`);
-  if (!res.ok) throw new Error(`meeting-service clients ${res.status}`);
-  return res.json();
+  const res = await meetingAxios.get<ClientOption[]>("/api/clients");
+  return res.data;
 }
 
 export async function fetchAdvisors(): Promise<AdvisorOption[]> {
-  const res = await fetch(`${BASE_URL}/api/advisors`);
-  if (!res.ok) throw new Error(`meeting-service advisors ${res.status}`);
-  return res.json();
+  const res = await meetingAxios.get<AdvisorOption[]>("/api/advisors");
+  return res.data;
 }
 
 export async function scheduleMeeting(payload: ScheduleMeetingPayload): Promise<{ meeting_id: string }> {
-  const res = await fetch(`${BASE_URL}/api/meetings/schedule`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`schedule meeting failed: ${err}`);
-  }
-  return res.json();
+  const res = await meetingAxios.post<{ meeting_id: string }>("/api/meetings/schedule", payload);
+  return res.data;
 }
 
 export async function fetchExtractions(validated?: boolean): Promise<Extraction[]> {
   const url = validated !== undefined
-    ? `${BASE_URL}/api/extractions/?validated=${validated}`
-    : `${BASE_URL}/api/extractions/`;
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`meeting-service ${res.status}`);
-  return res.json();
+    ? `/api/extractions/?validated=${validated}`
+    : `/api/extractions/`;
+  const res = await meetingAxios.get<Extraction[]>(url);
+  return res.data;
 }
 
+// `validated_by` no longer goes in the body — the meeting-service derives it
+// from the JWT (Authorization: Bearer ... / access_token cookie). The frontend
+// just hits the endpoint; field edits go through patchExtractionFields below.
 export async function validateExtraction(
   extractionId: string,
-  validatedBy: string,
-  changes: { field_id: number; new_value: any }[],
   notes?: string,
-): Promise<void> {
-  const res = await fetch(`${BASE_URL}/api/extractions/${extractionId}/validate`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ validated_by: validatedBy, validation_notes: notes, changes }),
-  });
-  if (!res.ok) throw new Error(`meeting-service validate ${res.status}`);
+): Promise<{ extraction_id: string; validated: boolean; version: number }> {
+  const res = await meetingAxios.post<{ extraction_id: string; validated: boolean; version: number }>(
+    `/api/extractions/${extractionId}/validate`,
+    { validation_notes: notes ?? null },
+  );
+  return res.data;
+}
+
+export interface FieldEdit {
+  field_id: string;
+  value: unknown;
+  confidence?: number;
+  confidence_level?: string;
+  source?: string;
+  reason?: string;
+}
+
+// Per-field reviewer edits. `changed_by` comes from the JWT on the server side.
+// expected_version is the version the reviewer saw when loading the page —
+// server returns 409 with current_version if a concurrent edit raced past us.
+export async function patchExtractionFields(
+  extractionId: string,
+  expectedVersion: number,
+  updates: FieldEdit[],
+): Promise<{ extraction_id: string; version: number; fields_changed: number }> {
+  try {
+    const res = await meetingAxios.post<{ extraction_id: string; version: number; fields_changed: number }>(
+      `/api/extractions/${extractionId}/fields`,
+      { expected_version: expectedVersion, updates },
+    );
+    return res.data;
+  } catch (err: any) {
+    if (err?.response?.status === 409) {
+      throw new Error(
+        `version_mismatch: extraction was edited elsewhere (server says ${err.response.data?.detail ?? "reload"})`
+      );
+    }
+    throw new Error(`meeting-service patch fields ${err?.response?.status ?? "error"}`);
+  }
 }
 
 // Maps numeric 174-field IDs to the attribute string IDs used by the validation UI

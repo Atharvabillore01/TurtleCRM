@@ -199,7 +199,7 @@ services:
       FIREFLY_API_KEY: ${FIREFLY_API_KEY:-}
       FIREFLY_WEBHOOK_SECRET: ${FIREFLY_WEBHOOK_SECRET:-}
       FIREFLY_BOT_EMAIL: ${FIREFLY_BOT_EMAIL:-}
-      CRM_AI_SERVICE_URL: ${CRM_AI_SERVICE_URL:-http://crm-agent:5000}
+      CRM_AI_SERVICE_URL: ${CRM_AI_SERVICE_URL:-http://host.docker.internal:5000}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       GOOGLE_SERVICE_ACCOUNT_FILE: /app/secrets/gcp-sa.json
@@ -215,8 +215,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      crm-agent:
-        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:4004/health')\""]
       interval: 20s
@@ -224,18 +222,8 @@ services:
       retries: 10
       start_period: 90s
 
-  crm-agent:
-    build:
-      context: .
-      dockerfile: turtle-crm-agent/turtle-crm-agent/Dockerfile
-    restart: unless-stopped
-    ports:
-      - "5000:5000"
-    env_file:
-      - turtle-crm-agent/turtle-crm-agent/.env
-    volumes:
-      - ./logs/crm-agent:/app/logs
-      - ./turtle-crm-agent/turtle-crm-agent/output:/app/output
+  # crm-agent is deployed separately (its own repo + host). Point meeting-service
+  # at it via the CRM_AI_SERVICE_URL env var.
 
   # ─── Frontend Apps ─────────────────────────────────────────────────────────
 

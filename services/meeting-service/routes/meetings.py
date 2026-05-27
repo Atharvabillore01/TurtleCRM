@@ -1,12 +1,15 @@
 from datetime import datetime, timezone
+from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
+from auth_dep import get_current_team_user
 from config import settings
 from db.meeting_procs import (
     proc_cancel_meeting,
     proc_list_meetings,
+    proc_save_meeting_external_sync,
     proc_schedule_meeting,
     proc_update_meeting_firefly_id,
 )
@@ -42,7 +45,11 @@ class ScheduleMeetingRequest(BaseModel):
     duration_minutes: int = 60
     agenda: str
     meeting_url: str = ""
-    created_by: str
+    # NB: `created_by` and `booked_by` are NO LONGER accepted from the request
+    # body — they now come from the JWT (Depends(get_current_team_user)). The
+    # field below is retained as a no-op so existing frontend callers don't
+    # break their payload schema; the value is ignored server-side.
+    created_by: str = ""
     title: str = ""
     client_name: str = ""
     advisor_name: str = ""
@@ -52,6 +59,11 @@ class ScheduleMeetingRequest(BaseModel):
     advisor_ids: list[str] = []
     advisor_names: list[str] = []
     advisor_emails: list[str] = []
+    # Auth-side UUIDs for the attendees the SP actually wires. Frontend gets
+    # these from fn_list_clients / fn_list_advisors. Falls back to client_id /
+    # advisor_ids if not supplied (legacy).
+    client_user_ids: list[str] = []
+    adviser_user_ids: list[str] = []
     member: str = ""
     guests: list[str] = []
     notes: str = ""
@@ -75,24 +87,40 @@ async def list_meetings():
 
 
 @router.post("/schedule", status_code=status.HTTP_201_CREATED)
-async def schedule_meeting(req: ScheduleMeetingRequest):
+async def schedule_meeting(
+    req: ScheduleMeetingRequest,
+    team_user_id: UUID = Depends(get_current_team_user),
+):
+    # `created_by` and `booked_by` are JWT-derived — never trust the body.
+    # Prefer the new client_user_ids/adviser_user_ids fields; fall back to the
+    # legacy single-id fields if the frontend hasn't been updated yet.
+    client_user_ids = req.client_user_ids or ([req.client_id] if req.client_id else [])
+    adviser_user_ids = req.adviser_user_ids or (
+        req.advisor_ids or ([req.advisor_id] if req.advisor_id else [])
+    )
+
     meeting_id = await proc_schedule_meeting(
-        client_id=req.client_id,
-        advisor_id=req.advisor_ids[0] if req.advisor_ids else req.advisor_id,
-        scheduled_at=req.scheduled_at,
-        duration_minutes=req.duration_minutes,
-        agenda=req.agenda,
-        created_by=req.created_by,
         title=req.title or req.agenda,
-        client_name=req.client_name,
-        advisor_name=req.advisor_name,
-        advisor_ids=req.advisor_ids or ([req.advisor_id] if req.advisor_id else []),
-        advisor_names=req.advisor_names or ([req.advisor_name] if req.advisor_name else []),
-        member=req.member,
-        guests=req.guests,
-        notes=req.notes,
-        meeting_url=req.meeting_url,
+        description="",
+        event_type="general",
+        start_time=req.scheduled_at,
+        duration_minutes=req.duration_minutes,
+        timezone=settings.google_calendar_timezone or "Asia/Kolkata",
+        source="manual",
+        created_by=str(team_user_id),
+        booked_by=str(team_user_id),
+        agenda=req.agenda,
+        google_meet_link=req.meeting_url or None,
+        client_user_ids=client_user_ids,
+        adviser_user_ids=adviser_user_ids,
         agents_to_use=req.agents_to_use,
+        metadata={
+            "guests":     req.guests,
+            "notes":      req.notes,
+            "member":     req.member,
+            "client_name":  req.client_name,
+            "advisor_name": req.advisor_name,
+        },
     )
 
     # ── Step 1: auto-create Google Meet + send calendar invites ─────────────────
@@ -124,6 +152,24 @@ async def schedule_meeting(req: ScheduleMeetingRequest):
         logger.info("google_meet_created", extra={"meeting_id": meeting_id, "meet_url": meet_url})
     except Exception as exc:
         logger.warning("google_calendar_failed", extra={"error": str(exc), "meeting_id": meeting_id})
+
+    # Persist the Google Meet URL + calendar event id into meeting_external_sync
+    # so the Fireflies webhook can match by Meet URL later (fn_find_meeting_by_meet_url).
+    if google_event_id or meet_url:
+        try:
+            await proc_save_meeting_external_sync(
+                meeting_id=meeting_id,
+                booking_provider="google_meet",
+                external_meeting_id=google_event_id or None,
+                meeting_url=meet_url or None,
+                source_status="synced",
+                actor_user_id=str(team_user_id),
+            )
+        except Exception as exc:
+            logger.warning("save_meeting_external_sync_failed", extra={
+                "meeting_id": meeting_id,
+                "error": str(exc),
+            })
 
     # Fireflies bot is invited via calendar attendee (firefly_bot_email) — no API call needed.
     await proc_update_meeting_firefly_id(

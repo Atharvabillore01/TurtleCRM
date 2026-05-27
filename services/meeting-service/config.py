@@ -7,9 +7,17 @@ class Settings(BaseSettings):
     node_env: str = "development"
     meeting_service_port: int = 4004
 
+    # Shared JWT secret — must match auth-service.jwt_secret so auth_dep can verify tokens.
+    jwt_secret: str = "changeme_jwt_secret_min_32_chars"
+
+    database_url: str = "postgresql://devadmin:StrongPassword123!@13.207.65.145:5432/qadb_turtle01"
     rabbitmq_url: str = "amqp://turtle:changeme@localhost:5672"
     redis_url: str = "redis://localhost:6379"
     crm_ai_service_url: str = "http://localhost:5000"
+
+    client_app_url: str = "http://localhost:3000"
+    advisor_app_url: str = "http://localhost:3001"
+    internal_app_url: str = "http://localhost:3002"
 
     firefly_api_key: str = ""
     firefly_webhook_secret: str = ""
