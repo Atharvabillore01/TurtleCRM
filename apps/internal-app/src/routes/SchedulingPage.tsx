@@ -2,7 +2,6 @@ import React, { useEffect, useState } from "react";
 import SchedulingView from "../components/scheduling/SchedulingView";
 import SchedulingModal from "../components/scheduling/SchedulingModal";
 import { createEmptySchedulingForm } from "../data/mockData";
-import { buildDateTime } from "../utils/dateTime";
 import {
   fetchClients,
   fetchAdvisors,
@@ -117,7 +116,9 @@ export default function SchedulingPage() {
     }
 
     const primaryAdvisor = advisors[0];
-    const scheduledAt = buildDateTime(form.date, form.time);
+    // Backend expects ISO-8601 (datetime.fromisoformat). form.date is YYYY-MM-DD,
+    // form.time is HH:MM — combine as a local datetime, then serialise to UTC ISO.
+    const scheduledAt = new Date(`${form.date}T${form.time}:00`).toISOString();
 
     try {
       const result = await scheduleMeeting({
@@ -135,6 +136,11 @@ export default function SchedulingPage() {
         advisor_ids: advisors.map((a: any) => a.id),
         advisor_names: advisors.map((a: any) => a.name),
         advisor_emails: advisors.map((a: any) => a.email || "").filter(Boolean),
+        // Real auth UUIDs the backend FK requires.
+        client_user_ids: client.client_user_id ? [client.client_user_id] : [],
+        adviser_user_ids: advisors
+          .map((a: any) => a.adviser_user_id)
+          .filter((id: string | undefined): id is string => !!id),
         member: form.member || form.bookedBy || "",
         guests: form.guests || [],
         notes: form.detailsHappened || "",

@@ -10,10 +10,10 @@ has live data immediately.
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
-from db.proc_caller import ProcResult, register_proc, call_proc
+from db.proc_caller import ProcResult, register_proc, call_proc, call_function
 
 
 # ── In-memory stores ──────────────────────────────────────────────────────────
@@ -116,286 +116,24 @@ _goals: list[dict] = []
 _qualitative: dict[str, dict] = {}
 
 
-# ── 174-field dummy data (from 174.txt sample) ───────────────────────────────
-
-_DUMMY_174_FIELDS = {
-    "1": {"value": "client_2", "confidence": 1.0, "confidence_level": "exact_quote", "source": "System", "agent": "SystemResolver", "attribute": "T_id", "touch_point": "Turtle ID"},
-    "2": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Lead/ Client Name", "touch_point": "Demographics & Family"},
-    "3": {"value": "Female", "confidence": 0.4, "confidence_level": "indirect", "source": "Advisor addresses client as 'princess' near the end of the first meeting.", "agent": "DemographicsAgent", "attribute": "Lead/ Client Gender", "touch_point": "Demographics & Family"},
-    "4": {"value": "27", "confidence": 0.8, "confidence_level": "clearly_inferable", "source": "DOB stated as 27/05/1998; advisor also says 'You're currently 27.'", "agent": "DemographicsAgent", "attribute": "Lead/ Client's Age", "touch_point": "Demographics & Family"},
-    "5": {"value": "Single", "confidence": 0.95, "confidence_level": "exact_quote", "source": "Advisor: 'So you are currently single?' Client later confirms: 'right now I'm a single.'", "agent": "DemographicsAgent", "attribute": "Marital Status", "touch_point": "Demographics & Family"},
-    "6": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Spouse Name", "touch_point": "Demographics & Family"},
-    "7": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Spouse Gender", "touch_point": "Demographics & Family"},
-    "8": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Spouse Age", "touch_point": "Demographics & Family"},
-    "9": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Tax Residency (Self, Spouse, Kids)", "touch_point": "Demographics & Family"},
-    "10": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Citizenship (Self, Spouse, Kids)", "touch_point": "Demographics & Family"},
-    "11": {"value": "Indore, Madhya Pradesh", "confidence": 0.6, "confidence_level": "estimated", "source": "Client: 'I was born in Panvel... Most of my schooling and all was done indore in Madhya Pradesh.'", "agent": "DemographicsAgent", "attribute": "Native (City, State)", "touch_point": "Demographics & Family"},
-    "12": {"value": "Bangalore, Karnataka", "confidence": 0.95, "confidence_level": "exact_quote", "source": "Client: 'I'm also based out of Bangalore.'", "agent": "DemographicsAgent", "attribute": "Current Residence (City, State)", "touch_point": "Demographics & Family"},
-    "13": {"value": "0", "confidence": 0.8, "confidence_level": "clearly_inferable", "source": "Client is single and discusses childbirth as a future possibility; no children mentioned.", "agent": "DemographicsAgent", "attribute": "Kids (Count)", "touch_point": "Demographics & Family"},
-    "14": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Returning from (State, Country)", "touch_point": "Demographics & Family"},
-    "15": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Kids as Foreign Citizens (Y/N)", "touch_point": "Demographics & Family"},
-    "16": {"value": "27/05/1998", "confidence": 0.95, "confidence_level": "exact_quote", "source": "Advisor: 'your date of birth?' Client: '27 05' ... '1998.'", "agent": "DemographicsAgent", "attribute": "Date of Birth", "touch_point": "Demographics & Family"},
-    "17": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Anniversary Date", "touch_point": "Demographics & Family"},
-    "18": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "PAN (Primary Member)", "touch_point": "Demographics & Family"},
-    "19": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Aadhaar (Primary Member)", "touch_point": "Demographics & Family"},
-    "20": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Primary Phone", "touch_point": "Contact Details"},
-    "21": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Secondary Phone", "touch_point": "Contact Details"},
-    "22": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Primary Email Id", "touch_point": "Contact Details"},
-    "23": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Secondary Email id", "touch_point": "Contact Details"},
-    "24": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Nominee Name", "touch_point": "Contact Details"},
-    "25": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Nominee Phone", "touch_point": "Contact Details"},
-    "26": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Beneficiary Name", "touch_point": "Contact Details"},
-    "27": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Beneficiary Phone", "touch_point": "Contact Details"},
-    "28": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Insurance Agent Name (if applicable)", "touch_point": "Contact Details"},
-    "29": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Insurance Agent Phone (if applicable)", "touch_point": "Contact Details"},
-    "30": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "KC Date", "touch_point": "Acquisition"},
-    "31": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Acquisition Source", "touch_point": "Acquisition"},
-    "32": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Membership Date", "touch_point": "Acquisition"},
-    "33": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Membership Status", "touch_point": "Acquisition"},
-    "34": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Membership Renewal Date", "touch_point": "Acquisition"},
-    "35": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "KC taker's Name", "touch_point": "Internal"},
-    "36": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "KC taker's Attitude", "touch_point": "Internal"},
-    "37": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "KC taker's Readiness", "touch_point": "Internal"},
-    "38": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "KC taker's Knowledge", "touch_point": "Internal"},
-    "39": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "KC taker's Remark", "touch_point": "Internal"},
-    "40": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "KC taker's Remark", "touch_point": "Internal"},
-    "41": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Client Type (Resident/R2I)", "touch_point": "Internal"},
-    "42": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Assigned to (Turtle PoC)", "touch_point": "Internal"},
-    "43": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Assets Worth ($)", "touch_point": "Finances"},
-    "44": {"value": "3785000", "confidence": 0.8, "confidence_level": "clearly_inferable", "source": "Summing explicit INR assets: bank 12L + EPFO 6L + equities 10L + MF 8.8L + gold 85K.", "agent": "FinanceAgent", "attribute": "Assets Worth (Rs.)", "touch_point": "Finances"},
-    "45": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Liabilities ($)", "touch_point": "Finances"},
-    "46": {"value": "0", "confidence": 0.8, "confidence_level": "clearly_inferable", "source": "Client: \"I've never taken up any EMIs or anything\"", "agent": "FinanceAgent", "attribute": "Liabilities (Rs.)", "touch_point": "Finances"},
-    "47": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Family Income ($)", "touch_point": "Finances"},
-    "48": {"value": "265000", "confidence": 0.95, "confidence_level": "exact_quote", "source": "Advisor: \"the amount which gets the bank account monthly is around 2.65\"", "agent": "FinanceAgent", "attribute": "Family Income (Rs.)", "touch_point": "Finances"},
-    "49": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Monthly Expenses ($)", "touch_point": "Finances"},
-    "50": {"value": "132000", "confidence": 0.95, "confidence_level": "exact_quote", "source": "2nd call: advisor says \"our current expenses... about 1.3 lakh rupees\"", "agent": "FinanceAgent", "attribute": "Monthly Expenses (Rs.)", "touch_point": "Finances"},
-    "51": {"value": "Corporate health insurance", "confidence": 0.95, "confidence_level": "exact_quote", "source": "Client: \"I'm using corporate insurance only.\"", "agent": "FinanceAgent", "attribute": "Policy Type", "touch_point": "Finances"},
-    "52": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Insurance Company", "touch_point": "Finances"},
-    "53": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Policy Name", "touch_point": "Finances"},
-    "54": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Purchase Mode (Online/Offline)", "touch_point": "Finances"},
-    "55": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Coverage Amount (Rs.)", "touch_point": "Finances"},
-    "56": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Premium (Rs.)", "touch_point": "Finances"},
-    "57": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Policy Renewal Date (DD/MM/YY)", "touch_point": "Finances"},
-    "58": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Coverage Adequacy (H/M/L/Ok)", "touch_point": "Finances"},
-    "59": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "HUF (Y/N)", "touch_point": "Finances"},
-    "60": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Will Executed (Y/N)", "touch_point": "Finances"},
-    "61": {"value": "Y", "confidence": 0.95, "confidence_level": "exact_quote", "source": "Client: \"So I started using a credit card about three months back\"", "agent": "FinanceAgent", "attribute": "Credit Card (Y/N)", "touch_point": "Finances"},
-    "62": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Card Name(s)", "touch_point": "Finances"},
-    "63": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "CC Issuing Authority (Bank/Amex etc.)", "touch_point": "Finances"},
-    "64": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Card Type (Visa/MC/Diners/Amex)", "touch_point": "Finances"},
-    "65": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Banking Partner(s)", "touch_point": "Finances"},
-    "66": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Account Holder (Self/Spouse/Kid/Parent)", "touch_point": "Finances"},
-    "67": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Income Tax Portal Password (hidden)", "touch_point": "Finances"},
-    "68": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "ESOPs/RSUs Vested Units", "touch_point": "Finances"},
-    "69": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "ESOPs Exercised Units", "touch_point": "Finances"},
-    "70": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "FMV ($)", "touch_point": "Finances"},
-    "71": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "ESOPs/RSUs Worth ($)", "touch_point": "Finances"},
-    "72": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "FMV (Rs.)", "touch_point": "Finances"},
-    "73": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "ESOPs/RSUs Worth (Rs.)", "touch_point": "Finances"},
-    "74": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Tax Filed till FY", "touch_point": "Finances"},
-    "75": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Advance Tax paid till (MM/YY)", "touch_point": "Finances"},
-    "76": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Penalty Paid in FY", "touch_point": "Finances"},
-    "77": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Interest Paid in FY", "touch_point": "Finances"},
-    "78": {"value": "2024", "confidence": 0.6, "confidence_level": "estimated", "source": "Client: \"I started taking investments semi seriously about last year\"; meeting is in 2025.", "agent": "FinanceAgent", "attribute": "Investing since (year)", "touch_point": "Finances"},
-    "79": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Family Planning", "touch_point": "Life Goals (with Priorities)"},
-    "80": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Buying a house", "touch_point": "Life Goals (with Priorities)"},
-    "81": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Kids Education", "touch_point": "Life Goals (with Priorities)"},
-    "82": {"value": "Financial freedom / retirement at age 45", "confidence": 0.95, "confidence_level": "exact_quote", "source": "Client first said '50. 55 is fair' then corrected: 'I think let's make it 45 there.'", "agent": "GoalsAgent", "attribute": "Retirement Planning", "touch_point": "Life Goals (with Priorities)"},
-    "83": {"value": ["Build a corpus for possible further education in ~4 years (20-30L)", "Car purchase in ~2 years (~10L budget)", "International vacations ~3-4L/year", "Career break/sabbatical for one quarter, not before Q3 2026", "Post-retirement: starting a business"], "confidence": 0.6, "confidence_level": "estimated", "source": "Multiple goal discussions across both calls.", "agent": "GoalsAgent", "attribute": "Custom Goals", "touch_point": "Life Goals (with Priorities)"},
-    "84": {"value": "Salaried", "confidence": 0.95, "confidence_level": "exact_quote", "source": "Client: \"So I'm a salaried employee and I work as a UX designer.\"", "agent": "ProfessionalAgent", "attribute": "Employment Type (Salaried, Self Employed, On a break, NA)", "touch_point": "Professional Details"},
-    "85": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Linkedin Profile", "touch_point": "Professional Details"},
-    "86": {"value": "Alteryx", "confidence": 0.95, "confidence_level": "exact_quote", "source": "Advisor: \"What's the organization name?\" Client: \"Alteryx...\"", "agent": "ProfessionalAgent", "attribute": "Works at", "touch_point": "Professional Details"},
-    "87": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Alumni (Institute)", "touch_point": "Professional Details"},
-    "88": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Alumni (Organization)", "touch_point": "Professional Details"},
-    "89": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Annual Income (Self)", "touch_point": "Professional Details"},
-    "90": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Annual Income (Spouse)", "touch_point": "Professional Details"},
-    "91": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Annual Income (HUF)", "touch_point": "Professional Details"},
-    "92": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "From (Destination)", "touch_point": "Travel Dates"},
-    "93": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "From (Date)", "touch_point": "Travel Dates"},
-    "94": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "To (Destination)", "touch_point": "Travel Dates"},
-    "95": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "To (Date)", "touch_point": "Travel Dates"},
-    "96": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Days in FY (Autocalculated)", "touch_point": "Travel Dates"},
-    "97": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Date of Return", "touch_point": "Travel Dates"},
-    "98": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Client's Availability (Weekday, Time, Timezone)", "touch_point": "Schedule & Communication"},
-    "99": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Advisor's Availability (Weekday, Time, Timezone)", "touch_point": "Schedule & Communication"},
-    "100": {"value": "Email, Call", "confidence": 0.95, "confidence_level": "exact_quote", "source": "Advisor: \"drop in an email to the Turtle team\" and \"they are going to schedule a call with me\"", "agent": "ScheduleAgent", "attribute": "Preferred mode of communication (Email/WA/Call)", "touch_point": "Schedule & Communication"},
-    "101": {"value": "Advisor to prepare and come back with the financial plan in about 3-4 days.", "confidence": 0.95, "confidence_level": "exact_quote", "source": "Advisor: \"Let me do this analysis and give me about three to four days...\"", "agent": "TaskAgent", "attribute": "P0", "touch_point": "Task Priority"},
-    "102": {"value": "Advisor to generate and review the client's CAS for mutual fund holdings.", "confidence": 0.95, "confidence_level": "exact_quote", "source": "Advisor: \"I will generate a consolidated account statement for you...\"", "agent": "TaskAgent", "attribute": "P1", "touch_point": "Task Priority"},
-    "103": {"value": "Client to check and let the advisor know employer group insurance details.", "confidence": 0.95, "confidence_level": "exact_quote", "source": "Advisor: \"You check and let us know of this.\"", "agent": "TaskAgent", "attribute": "P2", "touch_point": "Task Priority"},
-    "104": {"value": "Client to upload the CAS received in email to her Google Drive folder.", "confidence": 0.95, "confidence_level": "exact_quote", "source": "Advisor: \"You can drop in the same share drive...\"", "agent": "TaskAgent", "attribute": "P3", "touch_point": "Task Priority"},
-    "105": {"value": "Client to check the likely rental amount for the Howrah property and revert.", "confidence": 0.95, "confidence_level": "exact_quote", "source": "Advisor: \"But just take a look at it.\"", "agent": "TaskAgent", "attribute": "P4", "touch_point": "Task Priority"},
-    "106": {"value": ["Advisor to prepare and come back with the financial plan in 3-4 days.", "Advisor to analyze the client's mutual fund portfolio.", "Client to check and share employer group coverage details.", "Client to upload the CAS to Google Drive.", "Client to verify/confirm likely rental income for the Howrah property."], "confidence": 0.8, "confidence_level": "clearly_inferable", "source": "Multiple discussed action items across both calls.", "agent": "FeedbackAgent", "attribute": "Action Items", "touch_point": "Custom Fields (text)"},
-    "107": {"value": ["What is the client's employer group life insurance coverage?", "Does the employer provide personal accident cover?", "What is the actual rental income potential of the family property?"], "confidence": 0.8, "confidence_level": "clearly_inferable", "source": "Open items not resolved during meeting.", "agent": "FeedbackAgent", "attribute": "Open Queries", "touch_point": "Custom Fields (text)"},
-    "108": {"value": {"level": "M", "text": "Moderate complexity. Includes retirement, emergency reserve, car purchase, career break, education planning, portfolio consolidation, and insurance verification."}, "confidence": 0.8, "confidence_level": "clearly_inferable", "source": "Multiple goals and portfolio cleanup discussed.", "agent": "FeedbackAgent", "attribute": "Case Complexity (H/M/L) + Custom text", "touch_point": "Custom Fields (text)"},
-    "109": {"value": "Client asked how to add information between calls; advisor said to email the Turtle team.", "confidence": 0.8, "confidence_level": "clearly_inferable", "source": "'you can drop in an email to the Turtle team...'", "agent": "FeedbackAgent", "attribute": "Special Request", "touch_point": "Custom Fields (text)"},
-    "110": {"value": "Client feels financial planning has been overwhelming. Investments so far unstructured. No current dependents, no immediate house goal.", "confidence": 0.8, "confidence_level": "clearly_inferable", "source": "Client described overwhelm, anxiety, lack of structure.", "agent": "FeedbackAgent", "attribute": "Special Information", "touch_point": "Custom Fields (text)"},
-    "111": {"value": "Client can send any additional information by email to the Turtle team.", "confidence": 0.95, "confidence_level": "exact_quote", "source": "'you can drop in at any point of time, drop in an email to the Turtle team'", "agent": "FeedbackAgent", "attribute": "Special Instructions", "touch_point": "Custom Fields (text)"},
-    "112": {"value": ["Data gathering for financial plan", "Identifying goals and timelines", "Retirement planning", "Cash flow and expense review", "Risk management and insurance needs", "Review of existing investments", "Emergency reserve planning", "Car purchase planning"], "confidence": 0.8, "confidence_level": "clearly_inferable", "source": "Advisor outlined scope at start of call 1.", "agent": "FeedbackAgent", "attribute": "Consultation Agenda", "touch_point": "Custom Fields (text)"},
-    "113": {"value": "Overall sentiment is positive and engaged, with underlying financial anxiety. Client receptive to guidance.", "confidence": 0.8, "confidence_level": "clearly_inferable", "source": "Client said planning was 'very overwhelming,' wanted structure 'to sleep better at night.'", "agent": "FeedbackAgent", "attribute": "Sentiment Analysis", "touch_point": "Custom Fields (text)"},
-    "114": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Client's feedback on Financial Planner", "touch_point": "Custom Fields (text)"},
-    "115": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Client's feedback on Tax Advisor", "touch_point": "Custom Fields (text)"},
-    "116": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Client's feedback on Estate Planner", "touch_point": "Custom Fields (text)"},
-    "117": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Client's feedback on Banking & Compliance Advisor", "touch_point": "Custom Fields (text)"},
-    "118": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Client's feedback on Insurance Advisor", "touch_point": "Custom Fields (text)"},
-    "119": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Client's feedback on Credit Card Advisor", "touch_point": "Custom Fields (text)"},
-    "120": {"value": "Client is thoughtful and cooperative but lacks structure in investing.", "confidence": 0.8, "confidence_level": "clearly_inferable", "source": "Advisor said to consolidate investments and prefer mutual funds over direct equities.", "agent": "FeedbackAgent", "attribute": "Financial Planner's feedback on Client", "touch_point": "Custom Fields (text)"},
-    "121": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Tax Advisor's feedback on Client", "touch_point": "Custom Fields (text)"},
-    "122": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Estate Planner's feedback on Client", "touch_point": "Custom Fields (text)"},
-    "123": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Insurance Advisor's feedback on Client", "touch_point": "Custom Fields (text)"},
-    "124": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Banking & Compliance Advisor's feedback on Client", "touch_point": "Custom Fields (text)"},
-    "125": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Credit Card Advisor's feedback on Client", "touch_point": "Custom Fields (text)"},
-    "126": {"value": ["Strong monthly surplus relative to expenses.", "Emergency reserve can be funded from existing cash.", "Client is starting planning early in career.", "No financial dependents currently.", "Good credit score mentioned (789)."], "confidence": 0.8, "confidence_level": "clearly_inferable", "source": "Advisor said goals can be addressed comfortably within current surplus.", "agent": "FeedbackAgent", "attribute": "Wins", "touch_point": "Custom Fields (text)"},
-    "127": {"value": ["Client lacks a structured investment approach.", "Portfolio appears fragmented across many mutual fund schemes and direct equities.", "No personal term insurance or personal medical insurance confirmed.", "Several goals are still ambiguous or not fully quantified."], "confidence": 0.8, "confidence_level": "clearly_inferable", "source": "Client repeatedly described investing as random; advisor noted 21 mutual fund schemes.", "agent": "FeedbackAgent", "attribute": "Gaps", "touch_point": "Custom Fields (text)"},
-    "128": {"value": ["Consolidate and clean up the mutual fund portfolio.", "Avoid fresh direct equity investing; prefer mutual funds.", "Use arbitrage funds for emergency reserve and near-term break corpus.", "Verify employer insurance benefits and assess additional needs."], "confidence": 0.8, "confidence_level": "clearly_inferable", "source": "Advisor recommendations on portfolio consolidation, mutual funds, reserve sizing.", "agent": "FeedbackAgent", "attribute": "Suggestions", "touch_point": "Custom Fields (text)"},
-    "129": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "PAN (Self)", "touch_point": "Attachments (PDFs)"},
-    "130": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Aadhaar (Self)", "touch_point": "Attachments (PDFs)"},
-    "131": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "PAN (Spouse)", "touch_point": "Attachments (PDFs)"},
-    "132": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Aadhaar (Spouse)", "touch_point": "Attachments (PDFs)"},
-    "133": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "PAN (Other)", "touch_point": "Attachments (PDFs)"},
-    "134": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Aadhaar (Other)", "touch_point": "Attachments (PDFs)"},
-    "135": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Insurance Policies", "touch_point": "Attachments (PDFs)"},
-    "136": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Previous Indian Income Tax Return", "touch_point": "Attachments (PDFs)"},
-    "137": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Previous Foreign Income Tax Return", "touch_point": "Attachments (PDFs)"},
-    "138": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "e-CAS", "touch_point": "Attachments (PDFs)"},
-    "139": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Holding Statement", "touch_point": "Attachments (PDFs)"},
-    "140": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "ESOPs/RSUs Letter", "touch_point": "Attachments (PDFs)"},
-    "141": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Payslip(s)", "touch_point": "Attachments (PDFs)"},
-    "142": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Other (Doc. name)", "touch_point": "Attachments (PDFs)"},
-    "143": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Deliverables (Financial Plan, Tax Plan etc.)", "touch_point": "Attachments (PDFs)"},
-    "144": {"value": "H", "confidence": 0.8, "confidence_level": "clearly_inferable", "source": "Client sought structured financial planning, shared detailed data, attended follow-up review.", "agent": "QualitativeAgent", "attribute": "Turtle Relevance (H/M/L)", "touch_point": "Qualitative Parameters"},
-    "145": {"value": "Critical", "confidence": 0.4, "confidence_level": "indirect", "source": "Client said planning felt 'very overwhelming,' investments were 'very random.'", "agent": "QualitativeAgent", "attribute": "Prospect's Attitude (Optimistic/Pessimistic/Critical)", "touch_point": "Qualitative Parameters"},
-    "146": {"value": "M", "confidence": 0.8, "confidence_level": "clearly_inferable", "source": "Client understands basics but says 'with investing, I don't have any idea what to do.'", "agent": "QualitativeAgent", "attribute": "Prospect's Financial Acumen (H/M/L)", "touch_point": "Qualitative Parameters"},
-    "147": {"value": "N", "confidence": 0.95, "confidence_level": "exact_quote", "source": "Client: \"I'm a salaried employee and I work as a UX designer.\"", "agent": "QualitativeAgent", "attribute": "Prospect's Financial Background (Y/N)", "touch_point": "Qualitative Parameters"},
-    "148": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Prospect's Price Sensitivity (Y/N)", "touch_point": "Qualitative Parameters"},
-    "149": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Introvert/Extrovert", "touch_point": "Qualitative Parameters"},
-    "150": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "RPA (Aggresive/Moderate/Conservative)", "touch_point": "Qualitative Parameters"},
-    "151": {"value": ["Retirement planning", "Emergency fund", "Education planning", "Career break planning", "Car purchase", "Vacation planning", "Insurance planning", "Mutual fund portfolio review"], "confidence": 0.8, "confidence_level": "clearly_inferable", "source": "Client discussed all these topics across both calls.", "agent": "QualitativeAgent", "attribute": "Areas of Interest (Custom tags - PF)", "touch_point": "Qualitative Parameters"},
-    "152": {"value": ["Safety buffer preference", "Distrust of informal investment sources"], "confidence": 0.4, "confidence_level": "indirect", "source": "Client repeatedly asked to be 'on the safer side.'", "agent": "QualitativeAgent", "attribute": "Financial Biases (Custom tags)", "touch_point": "Qualitative Parameters"},
-    "153": {"value": ["Explorer", "Long term investor"], "confidence": 0.4, "confidence_level": "indirect", "source": "Client described investing as 'more of just exploratory just trying something.'", "agent": "QualitativeAgent", "attribute": "Investing Style (Custom tags)", "touch_point": "Qualitative Parameters"},
-    "154": {"value": ["Structure in financial planning", "Starting early", "Safety buffers", "Keeping career/education options open"], "confidence": 0.4, "confidence_level": "indirect", "source": "Client wanted 'some structure,' 'start early,' and asked to keep options open.", "agent": "QualitativeAgent", "attribute": "Likes", "touch_point": "Qualitative Parameters"},
-    "155": {"value": ["Unstructured/random investing", "Overwhelming planning process", "Untrusted online/YouTube advice"], "confidence": 0.95, "confidence_level": "exact_quote", "source": "Client said planning was 'very overwhelming,' investments were 'very random.'", "agent": "QualitativeAgent", "attribute": "Dislikes", "touch_point": "Qualitative Parameters"},
-    "156": {"value": "M", "confidence": 0.8, "confidence_level": "clearly_inferable", "source": "Client uses Google Pay, ClearTax, Gmail/Drive but needs help with financial tools.", "agent": "QualitativeAgent", "attribute": "Tech Saviness (H/M/L)", "touch_point": "Qualitative Parameters"},
-    "157": {"value": "M", "confidence": 0.8, "confidence_level": "clearly_inferable", "source": "Client is proactive and shares documents but needs advisor guidance for execution.", "agent": "QualitativeAgent", "attribute": "Execution Capability (H/M/L)", "touch_point": "Qualitative Parameters"},
-    "158": {"value": ["Proactive", "Cautious", "Reflective", "Detail-oriented"], "confidence": 0.4, "confidence_level": "indirect", "source": "Client reached out early, asked many clarifying questions, requested safer assumptions.", "agent": "QualitativeAgent", "attribute": "Behavioural Traits", "touch_point": "Qualitative Parameters"},
-    "159": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "ITR Filing (Spouse, Parents etc.)", "touch_point": "Special Projects/VAS (opted)"},
-    "160": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Rental TDS", "touch_point": "Special Projects/VAS (opted)"},
-    "161": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "GST services", "touch_point": "Special Projects/VAS (opted)"},
-    "162": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Remittance", "touch_point": "Special Projects/VAS (opted)"},
-    "163": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Custom Services", "touch_point": "Special Projects/VAS (opted)"},
-    "164": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Advisor Name", "touch_point": "Advisor"},
-    "165": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Advisor Phone", "touch_point": "Advisor"},
-    "166": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Advisor Email id", "touch_point": "Advisor"},
-    "167": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Advisor's Qualification", "touch_point": "Advisor"},
-    "168": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Advisor's Experience", "touch_point": "Advisor"},
-    "169": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Advance Tax", "touch_point": "Campaign (opted)"},
-    "170": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "India Tax Filing status for FY", "touch_point": "Campaign (opted)"},
-    "171": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "US Tax Filing status for Year", "touch_point": "Campaign (opted)"},
-    "172": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "W8-BEN", "touch_point": "Campaign (opted)"},
-    "173": {"value": "2026-04-25T21:42:54.359633", "confidence": 1.0, "confidence_level": "exact_quote", "source": "System", "agent": "SystemResolver", "attribute": "Last touchpoint date", "touch_point": "Engagement"},
-    "174": {"value": None, "confidence": 0.0, "confidence_level": "not_extracted", "source": "", "agent": None, "attribute": "Last touchpoint agenda", "touch_point": "Engagement"},
-}
-
-
-def _seed_dummy_data() -> None:
-    """Pre-seed one extraction and its parent meeting so the validation screen works out of the box."""
-    meeting_id = "meeting-seed-001"
-    extraction_id = "extraction-seed-001"
-
-    _meetings[meeting_id] = MeetingRow(
-        id=meeting_id,
-        client_id="client_2",
-        advisor_id="advisor_1",
-        advisor_ids=["advisor_1"],
-        advisor_names=["Anil Mehta"],
-        scheduled_at="2026-04-25T10:00:00Z",
-        duration_minutes=90,
-        agenda="Initial Consultation — Financial Planning",
-        title="Initial Consultation — Financial Planning",
-        client_name="Priya Kapoor",
-        advisor_name="Anil Mehta",
-        member="Ops Team",
-        created_by="system-seed",
-        status="extraction_completed",
-        firefly_meeting_id="firefly-seed-001",
-        transcript_text="[Sample transcript — seeded data]",
-        extraction_status="completed",
-    )
-
-    _extractions[extraction_id] = ExtractionRow(
-        id=extraction_id,
-        client_id="client_2",
-        meeting_id=meeting_id,
-        extraction_job_id="job-seed-001",
-        provider="openai",
-        model="gpt-5.4",
-        extracted_at="2026-04-25T21:42:54",
-        duration_seconds=93.87,
-        total_fields=174,
-        raw_data=_DUMMY_174_FIELDS,
-    )
-
-    _summaries["summary-seed-001"] = SummaryRow(
-        id="summary-seed-001",
-        meeting_id=meeting_id,
-        client_id="client_2",
-        executive_summary=(
-            "Client is a 27-year-old salaried UX Designer at Alteryx, based in Bangalore. "
-            "Key goals: retire at 45, emergency fund, car purchase in 2 years, education corpus, "
-            "and career break in Q3 2026. Portfolio is fragmented across 21 mutual fund schemes "
-            "and direct equities. Monthly income: ₹2.65L, expenses: ₹1.32L. No liabilities."
-        ),
-        key_points=[
-            "Retirement / financial freedom goal: age 45",
-            "Assets: ₹37.85L (bank, EPFO, equities, MF, gold)",
-            "No liabilities — zero EMIs",
-            "Monthly surplus: ~₹1.33L",
-            "21 scattered mutual fund schemes — needs consolidation",
-            "Only corporate health cover — no personal insurance",
-        ],
-        decisions_made=[
-            "Advisor to prepare full financial plan in 3-4 days",
-            "Client to upload CAS to shared Google Drive",
-            "Client to verify employer group insurance details",
-        ],
-        client_sentiment="positive",
-        advisor_notes="Client engaged and open to guidance. Good surplus for goals. Needs portfolio cleanup.",
-        generated_by_model="gpt-5.4",
-        generation_duration_seconds=12.5,
-    )
-
-
-# ── Stub reference data (replace with real proc lookups when DB is ready) ────
-
-_STUB_CLIENTS = [
-    {"id": "client_1", "name": "Rahul Sharma", "email": "siva@turtlefinance.in", "segment": "HNI"},
-    {"id": "client_2", "name": "Priya Kapoor", "email": "siva@turtlefinance.in", "segment": "Mass Affluent"},
-    {"id": "client_3", "name": "Amit Verma", "email": "siva@turtlefinance.in", "segment": "Ultra HNI"},
-    {"id": "client_4", "name": "Sneha Patel", "email": "siva@turtlefinance.in", "segment": "HNI"},
-    {"id": "client_5", "name": "Vikram Singh", "email": "siva@turtlefinance.in", "segment": "Mass Affluent"},
-]
-
-_STUB_ADVISORS = [
-    {"id": "advisor_1", "name": "Anil Mehta", "email": "atharvabillore007@gmail.com", "specialization": "Financial Planning"},
-    {"id": "advisor_2", "name": "Deepa Nair", "email": "atharvabillore007@gmail.com", "specialization": "Tax Advisory"},
-    {"id": "advisor_3", "name": "Rohit Joshi", "email": "atharvabillore007@gmail.com", "specialization": "Estate Planning"},
-    {"id": "advisor_4", "name": "Kavita Rao", "email": "atharvabillore007@gmail.com", "specialization": "Insurance"},
-]
-
-
 # ── Proc handlers ─────────────────────────────────────────────────────────────
 
-def _resolve_client_name(client_id: str, provided: str | None) -> str:
-    if provided:
-        return provided
-    match = next((c for c in _STUB_CLIENTS if c["id"] == client_id), None)
-    return match["name"] if match else client_id
+def _to_uuid(value: Any) -> uuid.UUID | None:
+    """Best-effort string/UUID → uuid.UUID. None / empty → None."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, uuid.UUID):
+        return value
+    return uuid.UUID(str(value))
 
 
-def _resolve_advisor_name(advisor_id: str, provided: str | None) -> str:
-    if provided:
-        return provided
-    match = next((a for a in _STUB_ADVISORS if a["id"] == advisor_id), None)
-    return match["name"] if match else advisor_id
+def _parse_iso_datetime(value: str | datetime) -> datetime:
+    """ISO-8601 string → tz-aware datetime. Already-datetime values pass through."""
+    if isinstance(value, datetime):
+        return value
+    # Python 3.11+ fromisoformat handles 'Z' and offsets; for older runtimes the
+    # service runs on python:3.12-slim so this is safe.
+    return datetime.fromisoformat(value)
 
 
 async def _sp_schedule_meeting(
@@ -406,56 +144,124 @@ async def _sp_schedule_meeting(
     agenda: str,
     created_by: str,
     title: str | None = None,
-    client_name: str | None = None,
-    advisor_name: str | None = None,
-    # multi-advisor fields — TODO: map to DB proc columns when sp_schedule_meeting is ready
+    client_name: str | None = None,    # legacy — unused; SP looks up via FK
+    advisor_name: str | None = None,   # legacy — unused
     advisor_ids: list | None = None,
-    advisor_names: list | None = None,
-    member: str | None = None,
-    guests: list | None = None,
-    notes: str | None = None,
+    advisor_names: list | None = None, # legacy — unused
+    member: str | None = None,         # legacy — booked_by is now FK to team_users
+    guests: list | None = None,        # stashed into meetings.metadata.guests
+    notes: str | None = None,          # → meeting_internal_details.pre_meeting_notes
     meeting_url: str | None = None,
     agents_to_use: list | None = None,
 ) -> ProcResult:
-    # TODO: replace body with real DB proc call when sp_schedule_meeting is ready
-    # async with get_db_pool().acquire() as conn:
-    #     row = await conn.fetchrow("CALL sp_schedule_meeting($1,$2,...)", ...)
-    #     return ProcResult(result=row["meeting_id"], nextAction="create_firefly_meeting")
-    meeting_id = str(uuid.uuid4())
+    """
+    Real DB call to deployed `sp_schedule_meeting` (Wave B).
 
-    # Normalise multi-advisor lists — fall back to single advisor_id/name when not provided
-    resolved_ids: list = advisor_ids if advisor_ids else [advisor_id]
-    resolved_names: list = (
-        advisor_names if advisor_names
-        else [_resolve_advisor_name(advisor_id, advisor_name)]
+    Atomic 3-table write across meetings + meeting_internal_details + N
+    meeting_attendees rows. Stores agents_to_use in meetings.metadata.
+    Emits `meeting.scheduled` to domain_events via sp_record_auth_event.
+
+    SIGNATURE CONTRACT:
+      Same kwargs as the legacy stub — route handler is unchanged.
+      Returns `meeting_id` string in ProcResult.result so callers that do
+      `meeting_id = await proc_schedule_meeting(...)` keep working.
+
+    TRANSLATION (legacy → SP):
+      scheduled_at (str) + duration_minutes (int)  → start_time + end_time (TIMESTAMPTZ)
+      client_id (str UUID)                          → p_client_user_ids = [UUID]
+      advisor_id / advisor_ids (multi-advisor)      → p_adviser_user_ids = [UUID,…]
+      created_by (str UUID from JWT)                → p_created_by (UUID)
+      created_by                                    → p_booked_by (same actor; the
+                                                      `member` form field is now a
+                                                      display label derived from team_users)
+      meeting_url                                   → p_google_meet_link
+      agents_to_use                                 → p_agents_to_use (text[])
+
+    DROPPED legacy fields (no schema columns for them yet):
+      client_name, advisor_name, advisor_names, member, guests, notes —
+      none of these are passed to the SP. If `guests`/`notes` need to
+      persist, add columns or store in meetings.metadata in a follow-up.
+    """
+    from db.pool import get_pool
+
+    # ---- Translate legacy params to SP params ----
+    start_dt   = _parse_iso_datetime(scheduled_at)
+    end_dt     = start_dt + timedelta(minutes=duration_minutes)
+    creator    = _to_uuid(created_by)
+    client_ids = [_to_uuid(client_id)] if client_id else []
+
+    # advisor_ids is the multi-advisor array if present, else fall back to single advisor_id
+    raw_adv = advisor_ids if advisor_ids else ([advisor_id] if advisor_id else [])
+    adviser_ids = [_to_uuid(a) for a in raw_adv if a]
+
+    agents = list(agents_to_use) if agents_to_use else []
+
+    # Stash `guests` into meetings.metadata.guests so it survives end-to-end.
+    # `member` is intentionally dropped — frontend's freeform string is
+    # superseded by booked_by_name (derived from team_users at read-time).
+    import json as _json
+    meta = {}
+    if guests:
+        meta["guests"] = list(guests)
+    # If the form submitted a `member` freeform label that doesn't match
+    # booked_by, preserve it as a display hint so it can be shown alongside
+    # the resolved booked_by_name.
+    if member and member.strip():
+        meta["member_label"] = member.strip()
+    meta_json = _json.dumps(meta) if meta else "{}"
+
+    # ---- Call SP ----
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM sp_schedule_meeting("
+            " $1::varchar, $2::text, $3::varchar,"
+            " $4::timestamptz, $5::timestamptz, $6::varchar, $7::varchar,"
+            " $8::uuid, $9::uuid,"
+            " $10::text, $11::text,"
+            " $12::uuid[], $13::uuid[], $14::text[], $15::jsonb,"
+            " $16::text)",
+            title or agenda,           # p_title
+            None,                      # p_description
+            "general",                 # p_event_type
+            start_dt,                  # p_start_time
+            end_dt,                    # p_end_time
+            "Asia/Kolkata",            # p_timezone
+            "manual",                  # p_source
+            creator,                   # p_created_by
+            creator,                   # p_booked_by (whoever is logged in)
+            agenda,                    # p_agenda
+            meeting_url,               # p_google_meet_link (filled later if NULL)
+            client_ids,                # p_client_user_ids
+            adviser_ids,               # p_adviser_user_ids
+            agents,                    # p_agents_to_use
+            meta_json,                 # p_metadata (carries guests + optional member_label)
+            notes,                     # p_pre_meeting_notes
+        )
+
+    if row is None or row["errornumber"] != 0:
+        err_no = row["errornumber"] if row else 5000
+        err_msg = row["errormessage"] if row else "sp_schedule_meeting returned no row"
+        return ProcResult(
+            errornumber=err_no,
+            errormessage=err_msg,
+            nextAction=row["nextaction"] if row else "retry",
+        )
+
+    # row["result"] is a JSONB column — asyncpg returns it as a str unless a
+    # codec is registered. Parse defensively.
+    raw_result = row["result"]
+    if isinstance(raw_result, str):
+        import json as _json
+        result = _json.loads(raw_result) if raw_result else {}
+    else:
+        result = raw_result or {}
+
+    meeting_id = result.get("meeting_id")
+
+    return ProcResult(
+        result=str(meeting_id),
+        nextAction=row["nextaction"] or "create_external_calendar_event",
     )
-    # Ensure every ID has a resolved name (look up stubs for any that are missing)
-    if len(resolved_names) < len(resolved_ids):
-        resolved_names = [_resolve_advisor_name(aid, None) for aid in resolved_ids]
-
-    display_advisor_name = " & ".join(resolved_names) if resolved_names else _resolve_advisor_name(advisor_id, advisor_name)
-
-    _meetings[meeting_id] = MeetingRow(
-        id=meeting_id,
-        client_id=client_id,
-        advisor_id=resolved_ids[0],
-        advisor_ids=resolved_ids,
-        advisor_names=resolved_names,
-        scheduled_at=scheduled_at,
-        duration_minutes=duration_minutes,
-        agenda=agenda,
-        status="scheduled",
-        title=title or agenda,
-        client_name=_resolve_client_name(client_id, client_name),
-        advisor_name=display_advisor_name,
-        member=member,
-        guests=guests or [],
-        notes=notes,
-        meeting_url=meeting_url,
-        agents_to_use=agents_to_use or [],
-        created_by=created_by,
-    )
-    return ProcResult(result=meeting_id, nextAction="create_firefly_meeting")
 
 
 async def _sp_update_meeting_firefly_id(
@@ -463,12 +269,65 @@ async def _sp_update_meeting_firefly_id(
     firefly_meeting_id: str,
     firefly_meeting_url: str,
 ) -> ProcResult:
-    meeting = _meetings.get(meeting_id)
-    if not meeting:
-        return ProcResult(errornumber=2001, errormessage="Meeting not found", nextAction="verify_meeting_id")
-    meeting.firefly_meeting_id = firefly_meeting_id
-    meeting.firefly_meeting_url = firefly_meeting_url
-    return ProcResult(result=meeting_id, nextAction="publish_scheduled_event")
+    """
+    Real DB call to deployed `sp_save_meeting_external_sync` (Wave B).
+
+    LEGACY NAMING NOTE:
+      The wrapper's name `_sp_update_meeting_firefly_id` is a misnomer
+      kept for backward compatibility with the existing route handler
+      (`routes/meetings.py:schedule_meeting`). It's called immediately
+      after Google Calendar creates the event, with:
+        - `firefly_meeting_id`  = "pending-{uuid}" sentinel (the real
+                                  Fireflies meeting_id arrives later via
+                                  webhook → meeting_transcripts.provider_meeting_id)
+        - `firefly_meeting_url` = the actual Google Meet URL
+
+    TRANSLATION:
+      meeting_id          → p_meeting_id
+      'google_meet'       → p_booking_provider (this is the calendar provider;
+                            Fireflies' own id lives on meeting_transcripts, not here)
+      firefly_meeting_id  → p_external_meeting_id (sentinel for now; the
+                            webhook can upsert a real value later)
+      firefly_meeting_url → p_meeting_url
+      NULL                → p_actor_user_id  (system-driven from the scheduling
+                            flow's post-calendar callback; actor_type='system'
+                            in the audit row)
+    """
+    from db.pool import get_pool
+
+    mid = _to_uuid(meeting_id)
+    if mid is None:
+        return ProcResult(
+            errornumber=1008,
+            errormessage="meeting_id is required.",
+        )
+
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM sp_save_meeting_external_sync("
+            " $1::uuid, $2::varchar, $3::varchar, $4::text, "
+            " $5::text, $6::jsonb, $7::varchar, $8::uuid)",
+            mid,
+            "google_meet",        # p_booking_provider
+            firefly_meeting_id,   # p_external_meeting_id (sentinel "pending-..." OK)
+            firefly_meeting_url,  # p_meeting_url
+            None,                 # p_host_url
+            "{}",                 # p_webhook_payload
+            "synced",             # p_source_status
+            None,                 # p_actor_user_id — system-driven post-calendar callback
+        )
+
+    if row is None or row["errornumber"] != 0:
+        return ProcResult(
+            errornumber=(row["errornumber"] if row else 5000),
+            errormessage=(row["errormessage"] if row else "sp_save_meeting_external_sync returned no row"),
+            nextAction=(row["nextaction"] if row else "retry"),
+        )
+
+    return ProcResult(
+        result=meeting_id,  # preserve legacy contract (caller does `await ...; meeting_id = ...`)
+        nextAction=row["nextaction"] or "publish_scheduled_event",
+    )
 
 
 async def _sp_update_meeting_status(
@@ -496,79 +355,245 @@ async def _sp_update_meeting_status(
 async def _sp_save_transcript(
     meeting_id: str,
     transcript_text: str,
-    transcript_url: str,
-    duration_seconds: int,
+    transcript_url: str | None = None,
+    duration_seconds: int = 0,
+    language: str = "mixed",
+    transcript_provider: str = "fireflies",
+    provider_meeting_id: str | None = None,
 ) -> ProcResult:
-    meeting = _meetings.get(meeting_id)
-    if not meeting:
-        return ProcResult(errornumber=2003, errormessage="Meeting not found", nextAction="verify_meeting_id")
-    meeting.transcript_text = transcript_text
-    meeting.transcript_url = transcript_url
-    meeting.transcript_duration_seconds = duration_seconds
-    meeting.status = "transcribed"
-    meeting.extraction_status = "pending"
-    return ProcResult(result=meeting_id, nextAction="publish_transcribed_event")
+    """
+    Real DB call to deployed `sp_save_transcript` (Wave C).
+
+    IDEMPOTENT on (meeting_id, transcript_provider) — table UNIQUE
+    constraint from migration 018. Fireflies webhook re-delivery returns
+    the existing transcript row instead of duplicating; the SP returns
+    `was_insert: false` in the result on replay.
+
+    SIGNATURE:
+      Same first 4 positional args as the legacy stub
+      (meeting_id, transcript_text, transcript_url, duration_seconds)
+      plus 3 optional kwargs the deployed SP supports. Existing callers
+      using the 4-arg form keep working.
+
+    DROPPED LEGACY BEHAVIOUR:
+      The old stub also flipped `meeting.status = "transcribed"` and
+      `meeting.extraction_status = "pending"`. Those are orchestration
+      concerns the webhook handler should now drive explicitly via
+      sp_update_meeting_status (separate stub) — this SP is purely about
+      persisting the transcript row.
+    """
+    from db.pool import get_pool
+
+    mid = _to_uuid(meeting_id)
+    if mid is None:
+        return ProcResult(errornumber=1008, errormessage="meeting_id is required.")
+
+    if not transcript_text:
+        return ProcResult(errornumber=1008, errormessage="transcript_text is required.")
+
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM sp_save_transcript("
+            " $1::uuid, $2::text, $3::text, $4::int,"
+            " $5::varchar, $6::varchar, $7::varchar)",
+            mid,
+            transcript_text,
+            transcript_url,
+            duration_seconds or 0,
+            language,
+            transcript_provider,
+            provider_meeting_id,
+        )
+
+    if row is None or row["errornumber"] != 0:
+        return ProcResult(
+            errornumber=(row["errornumber"] if row else 5000),
+            errormessage=(row["errormessage"] if row else "sp_save_transcript returned no row"),
+            nextAction=(row["nextaction"] if row else "retry"),
+        )
+
+    # row["result"] is JSONB { transcript_id, meeting_id, was_insert, word_count }
+    raw_result = row["result"]
+    if isinstance(raw_result, str):
+        import json as _json
+        result = _json.loads(raw_result) if raw_result else {}
+    else:
+        result = raw_result or {}
+
+    return ProcResult(
+        result=result,
+        nextAction=row["nextaction"] or "publish_transcribed_event",
+    )
 
 
 async def _fn_get_meeting_for_extraction(meeting_id: str) -> ProcResult:
-    meeting = _meetings.get(meeting_id)
-    if not meeting:
-        return ProcResult(errornumber=2001, errormessage="Meeting not found")
-    agenda_lower = meeting.agenda.lower()
-    if "initial" in agenda_lower:
-        meeting_type = "initial_consultation"
-    elif "review" in agenda_lower:
-        meeting_type = "financial_review"
-    elif "goal" in agenda_lower:
-        meeting_type = "goal_planning"
-    else:
-        meeting_type = "initial_consultation"
+    """
+    Defensive re-read for transcript_processor / extraction worker. Given a
+    meeting_id, return the canonical extraction context as it lives in the
+    DB right now — overriding any stale value the worker might be holding
+    from a delayed event delivery.
 
-    agent_map = {
-        "initial_consultation": ["DemographicsAgent", "FinanceAgent", "GoalsAgent", "ProfessionalAgent", "QualitativeAgent", "SystemResolver"],
-        "financial_review": ["FinanceAgent", "GoalsAgent", "TaskAgent", "FeedbackAgent", "SystemResolver"],
-        "goal_planning": ["GoalsAgent", "FinanceAgent", "ScheduleAgent", "TaskAgent", "SystemResolver"],
-    }
+    NOTE: This helper is currently unused by routes/workers (the webhook
+    handler uses fn_find_meeting_by_meet_url instead). Kept here so the
+    contract is honest in case a future worker wants the by-id variant.
+
+    LEGACY BEHAVIOUR REPLACED:
+      Old stub derived `agents_to_use` by keyword-matching the agenda string
+      ("initial" → six agents, "review" → five, "goal" → five). That heuristic
+      was a stand-in until agents_to_use was persisted per-meeting. With the
+      Wave B SPs, agents_to_use is now stored authoritatively in
+      meetings.metadata->'agents_to_use' at schedule time. We read that
+      directly here — no heuristic. If ops scheduled the meeting with no
+      agents, we return an empty list and let crm-agent run its full
+      default pipeline.
+
+    RETURNED SHAPE (unchanged from legacy stub):
+      { client_id, agenda, scheduled_at, agents_to_use }
+      `client_id` resolves to the FIRST client attendee (most meetings
+      have exactly one; the legacy contract assumed singular).
+    """
+    from db.pool import get_pool
+
+    mid = _to_uuid(meeting_id)
+    if mid is None:
+        return ProcResult(errornumber=1008, errormessage="meeting_id is required.")
+
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT
+                m.start_time,
+                mid.agenda,
+                COALESCE(m.metadata->'agents_to_use', '[]'::JSONB) AS agents_to_use,
+                (
+                    SELECT ma.client_user_id
+                      FROM meeting_attendees ma
+                     WHERE ma.meeting_id = m.id
+                       AND ma.client_user_id IS NOT NULL
+                     ORDER BY ma.created_at ASC
+                     LIMIT 1
+                ) AS client_user_id
+              FROM meetings m
+              LEFT JOIN meeting_internal_details mid ON mid.meeting_id = m.id
+             WHERE m.id = $1::uuid
+            """,
+            mid,
+        )
+
+    if row is None:
+        return ProcResult(errornumber=2001, errormessage="Meeting not found")
+
+    # agents_to_use comes back as either JSONB-parsed list or a JSON string
+    raw_agents = row["agents_to_use"]
+    if isinstance(raw_agents, str):
+        import json as _json
+        try:
+            raw_agents = _json.loads(raw_agents) if raw_agents else []
+        except ValueError:
+            raw_agents = []
+    agents_list = raw_agents if isinstance(raw_agents, list) else []
+
     return ProcResult(result={
-        "client_id": meeting.client_id,
-        "agenda": meeting.agenda,
-        "scheduled_at": meeting.scheduled_at,
-        "agents_to_use": agent_map[meeting_type],
+        "client_id":     str(row["client_user_id"]) if row["client_user_id"] else None,
+        "agenda":        row["agenda"] or "",
+        "scheduled_at":  row["start_time"].isoformat() if row["start_time"] else None,
+        "agents_to_use": agents_list,
     })
 
 
 async def _sp_save_extraction(
-    client_id: str,
     meeting_id: str,
     extraction_job_id: str,
     provider: str,
     model: str,
-    extracted_at: str,
-    duration_seconds: float,
-    total_fields: int,
     raw_data: dict,
+    transcript_id: str | None = None,
+    extracted_at: str | None = None,
+    duration_seconds: float = 0,
+    total_fields: int | None = None,
+    # Legacy keyword arg from transcript_processor — swallowed; the SP
+    # derives the client from meeting_attendees, no need to pass it in.
+    client_id: str | None = None,
 ) -> ProcResult:
-    if any(e.extraction_job_id == extraction_job_id for e in _extractions.values()):
-        return ProcResult(errornumber=3001, errormessage="Extraction job ID already exists", nextAction="check_duplicate")
-    extraction_id = str(uuid.uuid4())
-    _extractions[extraction_id] = ExtractionRow(
-        id=extraction_id,
-        client_id=client_id,
-        meeting_id=meeting_id,
-        extraction_job_id=extraction_job_id,
-        provider=provider,
-        model=model,
-        extracted_at=extracted_at,
-        duration_seconds=duration_seconds,
-        total_fields=total_fields,
-        raw_data=raw_data,
+    """
+    Real DB call to deployed `sp_save_extraction` (Wave C).
+
+    IDEMPOTENT on `extraction_job_id` — UNIQUE constraint in migration 018.
+    Replay-safe: if transcript_processor crashes between LLM call and DB
+    write and is restarted, the same job_id makes the second attempt a
+    no-op (returns the existing row with `was_insert: false`).
+
+    SIGNATURE:
+      Loose kwarg layout that accepts the worker's exact call shape (it
+      passes `client_id=...` which is no longer needed — swallowed by
+      the `client_id` param above and ignored).
+
+    DROPPED LEGACY BEHAVIOUR:
+      The old stub also mutated meeting.status='extraction_completed' /
+      extraction_status='completed' / extraction_job_id on the in-memory
+      MeetingRow. That coupling moves to the orchestration layer — the
+      transcript_processor should call sp_update_meeting_status('completed')
+      separately after a successful extraction save.
+    """
+    from db.pool import get_pool
+
+    mid = _to_uuid(meeting_id)
+    jid = _to_uuid(extraction_job_id)
+    if mid is None or jid is None:
+        return ProcResult(
+            errornumber=1008,
+            errormessage="meeting_id and extraction_job_id are required.",
+        )
+    if not provider or not model or raw_data is None:
+        return ProcResult(
+            errornumber=1008,
+            errormessage="provider, model, and raw_data are required.",
+        )
+
+    tid = _to_uuid(transcript_id) if transcript_id else None
+
+    # asyncpg may or may not have a JSONB codec registered — pass a JSON
+    # string to be safe.
+    import json as _json
+    raw_data_json = _json.dumps(raw_data)
+
+    extracted_at_dt = _parse_iso_datetime(extracted_at) if extracted_at else None
+
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM sp_save_extraction("
+            " $1::uuid, $2::uuid, $3::varchar, $4::varchar, $5::jsonb,"
+            " $6::uuid, $7::timestamptz, $8::numeric, $9::int)",
+            mid,
+            jid,
+            provider,
+            model,
+            raw_data_json,
+            tid,
+            extracted_at_dt,
+            duration_seconds or 0,
+            total_fields,
+        )
+
+    if row is None or row["errornumber"] != 0:
+        return ProcResult(
+            errornumber=(row["errornumber"] if row else 5000),
+            errormessage=(row["errormessage"] if row else "sp_save_extraction returned no row"),
+            nextAction=(row["nextaction"] if row else "retry"),
+        )
+
+    # row["result"] = { extraction_id, meeting_id, version, was_insert,
+    #                   total_fields, already_validated }
+    raw_result = row["result"]
+    if isinstance(raw_result, str):
+        result_dict = _json.loads(raw_result) if raw_result else {}
+    else:
+        result_dict = raw_result or {}
+
+    return ProcResult(
+        result=result_dict,
+        nextAction=row["nextaction"] or "open_for_validation",
     )
-    meeting = _meetings.get(meeting_id)
-    if meeting:
-        meeting.status = "extraction_completed"
-        meeting.extraction_status = "completed"
-        meeting.extraction_job_id = extraction_job_id
-    return ProcResult(result=extraction_id, nextAction="process_by_domain")
 
 
 async def _sp_save_demographics(client_id: str, extraction_id: str, data: dict) -> ProcResult:
@@ -660,68 +685,367 @@ async def _sp_cancel_meeting(
 
 
 async def _fn_get_extraction(extraction_id: str) -> ProcResult:
-    extraction = _extractions.get(extraction_id)
-    if not extraction:
+    """
+    Real DB call to deployed `fn_get_extraction` (Wave D).
+
+    AI Validation page DETAIL view. Returns one extraction with full
+    `raw_data` (174-field JSONB) PLUS `recent_edits` — the last 50
+    rows from extraction_field_audit, each enriched with the reviewer's
+    `team_users.name`. Reviewer can see what's been changed and by whom
+    before approving.
+
+    LEGACY SHAPE PRESERVED:
+      Returns a dict (not the legacy ExtractionRow dataclass). The route
+      handler at routes/extractions.py:30 already handles both via
+      `r if isinstance(r, dict) else asdict(r)`.
+    """
+    from db.pool import get_pool
+
+    eid = _to_uuid(extraction_id)
+    if eid is None:
+        return ProcResult(errornumber=1008, errormessage="extraction_id is required.")
+
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM fn_get_extraction($1::uuid)",
+            eid,
+        )
+
+    if row is None:
         return ProcResult(errornumber=3002, errormessage="Extraction not found")
-    return ProcResult(result=extraction)
+
+    import json as _json
+    d = dict(row)
+
+    # Normalise types for JSON serialization
+    for k, v in list(d.items()):
+        if isinstance(v, uuid.UUID):
+            d[k] = str(v)
+        elif isinstance(v, datetime):
+            d[k] = v.isoformat()
+        elif hasattr(v, "isoformat"):
+            d[k] = v.isoformat()
+        elif hasattr(v, "as_tuple"):
+            d[k] = float(v)
+
+    # raw_data + recent_edits may come back as JSONB strings; parse defensively.
+    for jsonb_key in ("raw_data", "recent_edits"):
+        v = d.get(jsonb_key)
+        if isinstance(v, str):
+            try:
+                d[jsonb_key] = _json.loads(v) if v else ({} if jsonb_key == "raw_data" else [])
+            except ValueError:
+                d[jsonb_key] = {} if jsonb_key == "raw_data" else []
+
+    return ProcResult(result=d)
 
 
-async def _fn_list_meetings() -> ProcResult:
-    # TODO: uncomment when sp_list_meetings proc is ready
-    # async with get_db_pool().acquire() as conn:
-    #     rows = await conn.fetch("CALL sp_list_meetings()")
-    #     return ProcResult(result=[dict(r) for r in rows])
-    results = [
-        {
-            "id": m.id,
-            "title": m.title or m.agenda,
-            "agenda": m.agenda,
-            "client_id": m.client_id,
-            "client_name": _resolve_client_name(m.client_id, m.client_name),
-            "advisor_id": m.advisor_id,
-            "advisor_name": m.advisor_name or _resolve_advisor_name(m.advisor_id, None),
-            "advisor_ids": m.advisor_ids or [m.advisor_id],
-            "advisor_names": m.advisor_names or [_resolve_advisor_name(m.advisor_id, None)],
-            "member": m.member or m.created_by or "—",
-            "guests": m.guests or [],
-            "notes": m.notes or "",
-            "scheduled_at": m.scheduled_at,
-            "duration_minutes": m.duration_minutes,
-            "status": m.status,
-            "meeting_url": m.meeting_url or m.firefly_meeting_url or "",
-            "firefly_meeting_id": m.firefly_meeting_id or "",
-            "extraction_status": m.extraction_status or "",
-            "agents_to_use": m.agents_to_use or [],
-            "created_by": m.created_by or "",
-            "created_at": m.created_at,
-        }
-        for m in _meetings.values()
-    ]
-    results.sort(key=lambda m: m["scheduled_at"], reverse=True)
-    return ProcResult(result=results)
+async def _fn_list_meetings_real(
+    status: str | None = None,
+    p_from: datetime | None = None,
+    p_to: datetime | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> ProcResult:
+    """
+    Real DB call to deployed `fn_list_meetings` (TABLE-returning function).
+
+    The deployed SP returns a NEW shape (per migration 005 schema):
+        id, title, event_type, status, start_time, end_time, timezone,
+        agenda, google_meet_link, meeting_url, firefly_meeting_id,
+        agents_to_use (jsonb), client_user_ids[], client_names[],
+        adviser_user_ids[], adviser_names[], booked_by, booked_by_name,
+        created_by, created_by_name, created_at
+
+    The frontend's meetingRecordToRow (apps/internal-app/src/routes/
+    SchedulingPage.tsx) still reads the OLD shape with fields like
+    scheduled_at, duration_minutes, client_name, advisor_name, member,
+    notes, guests, extraction_status. This adapter maps new→old so the
+    UI keeps working WITHOUT a frontend deploy.
+
+    When SchedulingPage migrates to the new shape, delete the adapter
+    block below and just return the raw rows.
+    """
+    from db.pool import get_pool
+
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM fn_list_meetings($1::text, $2::timestamptz, "
+            "$3::timestamptz, $4::int, $5::int)",
+            status, p_from, p_to, limit, offset,
+        )
+
+    result: list[dict] = []
+    for r in rows:
+        d = dict(r)
+
+        # ── Normalise types for JSON serialization ────────────────────────
+        for k, v in list(d.items()):
+            if isinstance(v, uuid.UUID):
+                d[k] = str(v)
+            elif isinstance(v, list) and v and isinstance(v[0], uuid.UUID):
+                d[k] = [str(x) for x in v]
+            elif isinstance(v, datetime):
+                d[k] = v.isoformat()
+            elif hasattr(v, "isoformat"):     # date
+                d[k] = v.isoformat()
+            elif hasattr(v, "as_tuple"):      # Decimal
+                d[k] = float(v)
+
+        # ── Adapter: project new SP shape onto legacy fields the frontend
+        # ── still reads (SchedulingPage.tsx meetingRecordToRow). Once the
+        # ── frontend moves to the new shape this block can be deleted.
+        client_names    = d.get("client_names") or []
+        adviser_names   = d.get("adviser_names") or []
+        client_user_ids = d.get("client_user_ids") or []
+        adviser_uids    = d.get("adviser_user_ids") or []
+
+        # Compute legacy duration_minutes from start_time / end_time.
+        duration_min = 0
+        if r["start_time"] and r["end_time"]:
+            duration_min = int((r["end_time"] - r["start_time"]).total_seconds() // 60)
+
+        # `guests` comes back as JSONB. asyncpg may return it as str or list.
+        raw_guests = d.get("guests")
+        if isinstance(raw_guests, str):
+            import json as _json
+            try:
+                raw_guests = _json.loads(raw_guests) if raw_guests else []
+            except ValueError:
+                raw_guests = []
+        guests_list = raw_guests if isinstance(raw_guests, list) else []
+
+        d.update({
+            "scheduled_at":       d.get("start_time"),
+            "duration_minutes":   duration_min,
+            "client_id":          client_user_ids[0] if client_user_ids else None,
+            "client_name":        client_names[0]    if client_names    else "",
+            "advisor_id":         adviser_uids[0]    if adviser_uids    else None,
+            "advisor_name":       " & ".join(adviser_names) if adviser_names else "",
+            "advisor_ids":        adviser_uids,
+            "advisor_names":      adviser_names,
+            "member":             d.get("booked_by_name") or d.get("created_by_name") or "—",
+            "guests":             guests_list,
+            "notes":              d.get("pre_meeting_notes") or "",
+            "extraction_status":  "",   # set by future fn_list_meetings_with_extraction_status
+            # `agents_to_use` already comes back from the SP — usually as a
+            # Python list because asyncpg unwraps jsonb arrays automatically.
+        })
+
+        result.append(d)
+
+    return ProcResult(result=result)
 
 
-async def _fn_list_clients() -> ProcResult:
-    # TODO: uncomment when sp_list_clients proc is ready
-    # async with get_db_pool().acquire() as conn:
-    #     rows = await conn.fetch("CALL sp_list_clients()")
-    #     return ProcResult(result=[dict(r) for r in rows])
-    return ProcResult(result=_STUB_CLIENTS)
+async def _fn_list_meetings(
+    status: str | None = None,
+    p_from: datetime | None = None,
+    p_to: datetime | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> ProcResult:
+    """Public-facing handler — delegates to the real DB implementation."""
+    return await _fn_list_meetings_real(status, p_from, p_to, limit, offset)
 
 
-async def _fn_list_advisors() -> ProcResult:
-    # TODO: uncomment when sp_list_advisors proc is ready
-    # async with get_db_pool().acquire() as conn:
-    #     rows = await conn.fetch("CALL sp_list_advisors()")
-    #     return ProcResult(result=[dict(r) for r in rows])
-    return ProcResult(result=_STUB_ADVISORS)
+async def _fn_list_clients(
+    search: str | None = None,
+    advisor_id: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> ProcResult:
+    """
+    Real DB call to deployed `fn_list_clients` (TABLE-returning function).
+    Replaces the previous _STUB_CLIENTS in-memory fixture.
+
+    Returned dict shape (per row):
+        id, name, email, phone, advisor_id, advisor_code, advisor_name,
+        client_type, importance_type, onboarding_status, lead_source_id,
+        created_at
+
+    Frontend ClientOption type currently declares `segment` — that field
+    is absent at runtime and will be undefined in the React picker. Map
+    importance_type to `segment` here so the existing type stays satisfied
+    without a frontend change.
+    """
+    from db.pool import get_pool
+
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM fn_list_clients($1::text, $2::uuid, $3::int, $4::int)",
+            search,
+            advisor_id,
+            limit,
+            offset,
+        )
+
+        # fn_list_clients returns clients.id but the schedule SP needs
+        # client_users.id (FK on meeting_attendees.fk_ma_client_user). Pull
+        # the primary client_user_id for each row in one batch query.
+        client_ids = [r["id"] for r in rows]
+        user_map: dict[uuid.UUID, uuid.UUID] = {}
+        if client_ids:
+            mapping_rows = await conn.fetch(
+                """
+                SELECT DISTINCT ON (caa.client_id)
+                       caa.client_id, caa.client_user_id
+                  FROM client_account_access caa
+                 WHERE caa.client_id = ANY($1::uuid[])
+                   AND caa.is_primary = TRUE
+                   AND caa.is_active  = TRUE
+                 ORDER BY caa.client_id, caa.created_at ASC
+                """,
+                client_ids,
+            )
+            user_map = {m["client_id"]: m["client_user_id"] for m in mapping_rows}
+
+    result = []
+    for r in rows:
+        d = dict(r)
+        # Backfill the legacy `segment` key the frontend type expects.
+        d["segment"] = d.get("importance_type") or "standard"
+        # Expose client_users.id for downstream sp_schedule_meeting attendee insert.
+        cu_id = user_map.get(d["id"])
+        d["client_user_id"] = str(cu_id) if cu_id else None
+        # Stringify UUIDs/timestamps so FastAPI's JSONResponse can serialize cleanly.
+        for k, v in list(d.items()):
+            if isinstance(v, uuid.UUID):
+                d[k] = str(v)
+            elif isinstance(v, datetime):
+                d[k] = v.isoformat()
+        result.append(d)
+
+    return ProcResult(result=result)
 
 
-async def _fn_list_extractions(validated: bool | None = None) -> ProcResult:
-    results = list(_extractions.values())
-    if validated is not None:
-        results = [e for e in results if e.validated == validated]
-    return ProcResult(result=results)
+async def _fn_list_advisors(
+    search: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> ProcResult:
+    """
+    Real DB call to deployed `fn_list_advisors` (TABLE-returning function).
+    Replaces the previous _STUB_ADVISORS in-memory fixture.
+
+    Returned dict shape (per row):
+        id (advisors.id), adviser_user_id, advisor_code, username, email, name,
+        payout_type, payout_percentage, experience_in_years,
+        current_client_count, joining_date, is_active, created_at
+
+    Frontend AdvisorOption type currently declares `specialization` — that
+    field is not in the schema. Backfill an empty string here so the
+    existing TS type stays satisfied without a frontend change. When the
+    business decides what 'specialization' means (e.g. a JSONB tag on
+    advisors), this mapping moves to the SP.
+    """
+    from db.pool import get_pool
+
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM fn_list_advisors($1::text, $2::int, $3::int)",
+            search,
+            limit,
+            offset,
+        )
+
+    result = []
+    for r in rows:
+        d = dict(r)
+        # Backfill the legacy `specialization` key the frontend type expects.
+        d["specialization"] = d.get("specialization") or ""
+        # Stringify UUIDs / dates / timestamps / decimals for JSON-safe output.
+        for k, v in list(d.items()):
+            if isinstance(v, uuid.UUID):
+                d[k] = str(v)
+            elif isinstance(v, datetime):
+                d[k] = v.isoformat()
+            elif hasattr(v, "isoformat"):     # datetime.date
+                d[k] = v.isoformat()
+            elif hasattr(v, "as_tuple"):      # decimal.Decimal — NUMERIC columns
+                d[k] = float(v)
+        result.append(d)
+
+    return ProcResult(result=result)
+
+
+async def _fn_list_extractions(
+    validated: bool | None = None,
+    meeting_id: str | None = None,
+    client_id: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> ProcResult:
+    """
+    Real DB call to deployed `fn_list_extractions` (Wave D).
+
+    The SP intentionally omits `raw_data` (10–100KB JSONB) from its return
+    shape for list-page perf. BUT the AI Validation page's React component
+    (AiValidationPage.tsx) reads `e.raw_data` from list rows to compute the
+    average-confidence preview. To keep the frontend working without a
+    refactor we do a SINGLE follow-up query that pulls raw_data for all
+    returned ids in one round-trip and merges it into each row.
+
+    Two queries, not N+1. Drop the follow-up query later when the AI
+    Validation page moves to per-row detail fetches via fn_get_extraction.
+
+    Args mirror the SP signature; the route handler currently passes only
+    `validated`, the rest accept their defaults.
+    """
+    from db.pool import get_pool
+
+    mid = _to_uuid(meeting_id) if meeting_id else None
+    cid = _to_uuid(client_id)  if client_id  else None
+
+    async with get_pool().acquire() as conn:
+        # 1. List with meeting context (no raw_data)
+        rows = await conn.fetch(
+            "SELECT * FROM fn_list_extractions("
+            " $1::boolean, $2::uuid, $3::uuid, $4::int, $5::int)",
+            validated, mid, cid, limit, offset,
+        )
+
+        if not rows:
+            return ProcResult(result=[])
+
+        # 2. One-shot raw_data fetch for all returned ids
+        extraction_ids = [r["id"] for r in rows]
+        raw_rows = await conn.fetch(
+            "SELECT id, raw_data FROM extractions WHERE id = ANY($1::uuid[])",
+            extraction_ids,
+        )
+
+    # ---- Build a {id → raw_data dict} map ----
+    import json as _json
+    raw_by_id: dict[str, dict] = {}
+    for rr in raw_rows:
+        raw = rr["raw_data"]
+        if isinstance(raw, str):
+            try:
+                raw = _json.loads(raw) if raw else {}
+            except ValueError:
+                raw = {}
+        raw_by_id[str(rr["id"])] = raw if isinstance(raw, dict) else {}
+
+    # ---- Normalise rows + attach raw_data ----
+    result: list[dict] = []
+    for r in rows:
+        d = dict(r)
+        # Stringify UUIDs, datetimes, decimals for JSON
+        for k, v in list(d.items()):
+            if isinstance(v, uuid.UUID):
+                d[k] = str(v)
+            elif isinstance(v, list) and v and isinstance(v[0], uuid.UUID):
+                d[k] = [str(x) for x in v]
+            elif isinstance(v, datetime):
+                d[k] = v.isoformat()
+            elif hasattr(v, "isoformat"):
+                d[k] = v.isoformat()
+            elif hasattr(v, "as_tuple"):
+                d[k] = float(v)
+        d["raw_data"] = raw_by_id.get(d["id"], {})
+        result.append(d)
+
+    return ProcResult(result=result)
 
 
 def hydrate_extractions_from_disk(extractions_dir: str = "/app/transcripts/extractions") -> int:
@@ -782,22 +1106,75 @@ def hydrate_extractions_from_disk(extractions_dir: str = "/app/transcripts/extra
 async def _sp_validate_extraction(
     extraction_id: str,
     validated_by: str,
-    validation_notes: str | None,
-    changes: list[dict],
+    validation_notes: str | None = None,
+    # Legacy kwarg from old callers — silently dropped. Field edits are now
+    # a separate concern handled by sp_patch_extraction_fields.
+    changes: list[dict] | None = None,
 ) -> ProcResult:
-    extraction = _extractions.get(extraction_id)
-    if not extraction:
-        return ProcResult(errornumber=3002, errormessage="Extraction not found")
-    # Apply field value changes
-    for change in changes:
-        field_id = str(change.get("field_id"))
-        if field_id in extraction.raw_data:
-            extraction.raw_data[field_id]["value"] = change.get("new_value")
-    extraction.validated = True
-    extraction.validated_by = validated_by
-    extraction.validated_at = datetime.now(timezone.utc).isoformat()
-    extraction.validation_notes = validation_notes
-    return ProcResult(result=extraction_id, nextAction="publish_validated_event")
+    """
+    Real DB call to deployed `sp_validate_extraction` (Wave D).
+
+    Flips `extractions.validated=true`, stamps `validated_by`/`validated_at`/
+    `validation_notes`. Idempotent — already-validated rows return 1016
+    with the existing state, no rewrite. Writes
+    `meeting.extraction.validated` to domain_events.
+
+    LEGACY CONTRACT BREAKING CHANGE:
+      Old stub also applied a list of field-value `changes` to raw_data at
+      validate-time. That's separated now — reviewer field edits go through
+      sp_patch_extraction_fields BEFORE validation. The `changes` param is
+      kept for kwarg backward-compat but is silently ignored. The route
+      handler doesn't pass it.
+    """
+    from db.pool import get_pool
+
+    eid = _to_uuid(extraction_id)
+    vby = _to_uuid(validated_by)
+    if eid is None or vby is None:
+        return ProcResult(
+            errornumber=1008,
+            errormessage="extraction_id and validated_by are required.",
+        )
+
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM sp_validate_extraction($1::uuid, $2::uuid, $3::text)",
+            eid, vby, validation_notes,
+        )
+
+    if row is None:
+        return ProcResult(errornumber=5000, errormessage="sp_validate_extraction returned no row")
+
+    # 1016 = already validated — surface as soft success
+    if row["errornumber"] == 1016:
+        raw_result = row["result"]
+        if isinstance(raw_result, str):
+            import json as _json
+            result = _json.loads(raw_result) if raw_result else {}
+        else:
+            result = raw_result or {"extraction_id": extraction_id, "validated": True}
+        result.setdefault("already_validated", True)
+        return ProcResult(result=result, nextAction=row["nextaction"])
+
+    if row["errornumber"] != 0:
+        return ProcResult(
+            errornumber=row["errornumber"],
+            errormessage=row["errormessage"],
+            nextAction=row["nextaction"] or "retry",
+        )
+
+    # Parse result JSONB defensively
+    raw_result = row["result"]
+    if isinstance(raw_result, str):
+        import json as _json
+        result = _json.loads(raw_result) if raw_result else {}
+    else:
+        result = raw_result or {}
+
+    return ProcResult(
+        result=result,
+        nextAction=row["nextaction"] or "project_to_domain_tables",
+    )
 
 
 # ── Registration ──────────────────────────────────────────────────────────────
@@ -883,10 +1260,10 @@ async def proc_update_meeting_status(**kwargs) -> str:
     return res.result
 
 
-async def proc_save_transcript(**kwargs):
-    res = await call_proc("sp_save_transcript", **kwargs)
-    if not res.ok:
-        raise RuntimeError(res.errormessage)
+# proc_save_transcript wrapper is defined later in this file (line ~1427) —
+# the call_function variant that goes direct to the deployed SP. The old
+# call_proc-based duplicate that lived here was dead code (shadowed by the
+# later definition due to Python's late binding) and is removed.
 
 
 async def proc_get_meeting_for_extraction(meeting_id: str) -> dict:
@@ -896,13 +1273,10 @@ async def proc_get_meeting_for_extraction(meeting_id: str) -> dict:
     return res.result
 
 
-async def proc_save_extraction(**kwargs) -> str:
-    res = await call_proc("sp_save_extraction", **kwargs)
-    if not res.ok:
-        if res.errornumber == 3001:
-            raise ValueError(res.errormessage)
-        raise RuntimeError(res.errormessage)
-    return res.result
+# proc_save_extraction wrapper is defined later (line ~1506) — the
+# call_function variant that goes directly to the deployed SP. The old
+# call_proc-based duplicate that lived here was dead code (Python late-
+# binding shadowed it with the later definition) and is removed.
 
 
 async def proc_save_demographics(**kwargs):
@@ -951,21 +1325,326 @@ async def proc_cancel_meeting(**kwargs):
         raise ValueError(res.errormessage) if res.errornumber in (2004, 2005) else RuntimeError(res.errormessage)
 
 
-async def proc_get_extraction(extraction_id: str) -> ExtractionRow:
+async def proc_get_extraction(extraction_id: str) -> dict:
+    """
+    AI Validation detail page. Dispatches through the registered
+    `_fn_get_extraction` stub, which now calls the deployed SP and
+    surfaces `raw_data` (174 fields) + `recent_edits` (last 50 audit
+    rows enriched with reviewer name).
+
+    Raises ValueError on not-found (1008/3002) so the route handler
+    can map to HTTP 404. Other DB errors raise RuntimeError → HTTP 500.
+    """
     res = await call_proc("fn_get_extraction", extraction_id)
     if not res.ok:
-        raise ValueError(res.errormessage)
+        if res.errornumber in (1008, 3002):
+            raise ValueError(res.errormessage)
+        raise RuntimeError(res.errormessage)
+    if not res.result:
+        raise ValueError(f"extraction {extraction_id} not found")
     return res.result
 
 
-async def proc_list_extractions(validated: bool | None = None) -> list[ExtractionRow]:
+async def proc_list_extractions(validated: bool | None = None) -> list[dict]:
+    """
+    AI Validation page list feed. Dispatches through the registered
+    `_fn_list_extractions` stub, which now calls the deployed SP and
+    follows up with a one-shot raw_data merge so the frontend's
+    avg-confidence preview keeps working.
+    """
     res = await call_proc("fn_list_extractions", validated)
     if not res.ok:
+        raise RuntimeError(res.errormessage)
+    return res.result or []
+
+
+# proc_validate_extraction wrapper is defined later (line ~1767) — the
+# kwarg-only call_function variant that goes directly to the deployed SP and
+# handles the idempotent 1016 'already validated' case. The old call_proc
+# duplicate that lived here was dead code (Python late-binding shadowed it)
+# and is removed.
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# REAL DB CALLS — these override the in-memory stubs above and route through
+# the deployed Postgres SPs via shared/db/proc_caller.call_function.
+#
+# Module-load order: this block runs LAST, so the function names below
+# replace the earlier definitions. The `register_meeting_procs` call in
+# main.py still wires the stubs for any test that uses call_proc directly,
+# but the public wrappers used by routes go through the real DB.
+# ─────────────────────────────────────────────────────────────────────────────
+
+from datetime import datetime as _dt
+from uuid import UUID as _UUID
+
+
+def _normalise_uuid_list(values) -> list[str]:
+    """Best-effort cast to a list of UUID-string for an SP UUID[] parameter."""
+    if values is None:
+        return []
+    if isinstance(values, str):
+        return [values]
+    return [str(v) for v in values if v]
+
+
+async def proc_schedule_meeting(
+    *,
+    client_user_ids: list[str] | None = None,
+    adviser_user_ids: list[str] | None = None,
+    agents_to_use: list[str] | None = None,
+    created_by: str,
+    booked_by: str | None = None,
+    title: str,
+    description: str = "",
+    event_type: str = "general",
+    start_time: str,
+    end_time: str | None = None,
+    duration_minutes: int = 60,
+    timezone: str = "Asia/Kolkata",
+    source: str = "manual",
+    agenda: str = "",
+    google_meet_link: str | None = None,
+    metadata: dict | None = None,
+    # Legacy compatibility shims — accept the old route's extra kwargs but ignore them.
+    **legacy_kwargs,
+) -> str:
+    """
+    Atomic meeting create against the deployed sp_schedule_meeting FUNCTION.
+
+    `created_by` MUST be a real team_users.id UUID (str). The route gets this
+    from the JWT via Depends(get_current_team_user) — never from the body.
+
+    `client_user_ids` / `adviser_user_ids` are UUIDs from the picker payloads.
+    """
+    # Normalise to datetime instances — asyncpg's TIMESTAMPTZ codec rejects strings.
+    try:
+        start_dt = (
+            start_time if isinstance(start_time, _dt)
+            else _dt.fromisoformat(start_time.replace("Z", "+00:00"))
+        )
+    except Exception as exc:
+        raise ValueError(f"could not parse start_time: {exc}")
+
+    if end_time is None:
+        end_dt = start_dt + timedelta(minutes=duration_minutes)
+    else:
+        try:
+            end_dt = (
+                end_time if isinstance(end_time, _dt)
+                else _dt.fromisoformat(end_time.replace("Z", "+00:00"))
+            )
+        except Exception as exc:
+            raise ValueError(f"could not parse end_time: {exc}")
+
+    res = await call_function(
+        "sp_schedule_meeting",
+        title, description, event_type,
+        start_dt, end_dt, timezone, source,
+        created_by, booked_by or created_by,
+        agenda, google_meet_link,
+        _normalise_uuid_list(client_user_ids),
+        _normalise_uuid_list(adviser_user_ids),
+        list(agents_to_use or []),
+        metadata or {},
+    )
+    if not res.ok:
+        if res.errornumber in (1008, 1012, 1013):
+            raise ValueError(res.errormessage)
+        raise RuntimeError(res.errormessage)
+    return res.result["meeting_id"]
+
+
+async def proc_save_meeting_external_sync(
+    *,
+    meeting_id: str,
+    booking_provider: str = "google_meet",
+    external_meeting_id: str | None = None,
+    meeting_url: str | None = None,
+    host_url: str | None = None,
+    webhook_payload: dict | None = None,
+    source_status: str = "synced",
+    actor_user_id: str | None = None,
+) -> dict:
+    res = await call_function(
+        "sp_save_meeting_external_sync",
+        meeting_id, booking_provider, external_meeting_id,
+        meeting_url, host_url, webhook_payload or {}, source_status,
+        actor_user_id,
+    )
+    if not res.ok:
+        if res.errornumber in (1008, 1014):
+            raise ValueError(res.errormessage)
         raise RuntimeError(res.errormessage)
     return res.result
 
 
-async def proc_validate_extraction(**kwargs):
-    res = await call_proc("sp_validate_extraction", **kwargs)
+async def proc_find_meeting_by_meet_url(meet_url: str) -> dict | None:  # type: ignore[override]
+    """Look up the meeting + agents_to_use + attendee context by Meet URL."""
+    if not meet_url:
+        return None
+    res = await call_function("fn_find_meeting_by_meet_url", meet_url)
     if not res.ok:
-        raise ValueError(res.errormessage)
+        raise RuntimeError(res.errormessage)
+    return res.result  # may be None if no match
+
+
+async def proc_save_transcript(
+    *,
+    meeting_id: str,
+    transcript_text: str,
+    transcript_url: str | None = None,
+    duration_seconds: int = 0,
+    language: str = "mixed",
+    transcript_provider: str = "fireflies",
+    provider_meeting_id: str | None = None,
+) -> dict:
+    res = await call_function(
+        "sp_save_transcript",
+        meeting_id, transcript_text, transcript_url,
+        duration_seconds, language, transcript_provider, provider_meeting_id,
+    )
+    if not res.ok:
+        if res.errornumber in (1008, 1014):
+            raise ValueError(res.errormessage)
+        raise RuntimeError(res.errormessage)
+    return res.result
+
+
+async def proc_save_extraction(
+    *,
+    meeting_id: str,
+    extraction_job_id: str,
+    provider: str,
+    model: str,
+    raw_data: dict,
+    transcript_id: str | None = None,
+    extracted_at: str | None = None,
+    duration_seconds: float = 0,
+    total_fields: int | None = None,
+    **legacy_kwargs,                # swallows `client_id` and any other legacy kwargs
+) -> str:
+    # asyncpg JSONB codec isn't guaranteed registered — pass a JSON string
+    # so the SP's p_raw_data JSONB parameter receives a valid jsonb cast.
+    import json as _json
+    raw_data_json = _json.dumps(raw_data) if not isinstance(raw_data, str) else raw_data
+
+    res = await call_function(
+        "sp_save_extraction",
+        meeting_id, extraction_job_id, provider, model, raw_data_json,
+        transcript_id, extracted_at, duration_seconds, total_fields,
+    )
+    if not res.ok:
+        if res.errornumber in (1008, 1014):
+            raise ValueError(res.errormessage)
+        raise RuntimeError(res.errormessage)
+
+    # res.result may come back as a JSONB string from PG; parse defensively.
+    result_dict = res.result
+    if isinstance(result_dict, str):
+        result_dict = _json.loads(result_dict) if result_dict else {}
+    if not isinstance(result_dict, dict):
+        raise RuntimeError(
+            f"sp_save_extraction returned unexpected result shape: {type(result_dict).__name__}"
+        )
+    return result_dict["extraction_id"]
+
+
+async def proc_patch_extraction_fields(
+    *,
+    extraction_id: str,
+    expected_version: int,
+    changed_by: str,
+    updates: list[dict],
+) -> dict:
+    """
+    Real DB call to deployed `sp_patch_extraction_fields` (Wave D).
+
+    Per-field reviewer edits with audit trail + optimistic concurrency.
+    Each edit becomes an append-only row in extraction_field_audit
+    (immutable via fn_prevent_all_updates trigger). `extractions.version`
+    bumps on success.
+
+    OPTIMISTIC CONCURRENCY (1015):
+      Caller passes the `expected_version` the reviewer saw on load.
+      If another reviewer raced past and bumped the version first, the
+      SP returns 1015 with the new current_version in result. We surface
+      this as a ValueError carrying both versions so the route can map
+      to HTTP 409 and the UI can prompt "reload and reapply".
+
+    JSON SERIALIZATION:
+      `updates` is a Python list of dicts → must be a JSON string for
+      the SP's p_updates JSONB parameter (asyncpg JSONB codec isn't
+      guaranteed registered).
+    """
+    import json as _json
+
+    # Serialize the updates list so it lands cleanly in the JSONB param.
+    updates_json = _json.dumps(updates) if not isinstance(updates, str) else updates
+
+    res = await call_function(
+        "sp_patch_extraction_fields",
+        extraction_id, expected_version, changed_by, updates_json,
+    )
+
+    # res.result may come back as a parsed dict OR a JSON string depending
+    # on whether asyncpg has a JSONB codec registered. Normalise.
+    raw_result = res.result
+    if isinstance(raw_result, str):
+        try:
+            raw_result = _json.loads(raw_result) if raw_result else {}
+        except ValueError:
+            raw_result = {}
+    if not isinstance(raw_result, dict):
+        raw_result = {}
+
+    if not res.ok:
+        if res.errornumber == 1015:
+            current_version = raw_result.get("current_version")
+            raise ValueError(
+                f"version mismatch (current={current_version}, "
+                f"expected={expected_version}) — reload and retry"
+            )
+        if res.errornumber in (1008, 1012, 1014):
+            raise ValueError(res.errormessage)
+        raise RuntimeError(res.errormessage)
+    return raw_result
+
+
+async def proc_validate_extraction(  # type: ignore[override]
+    *,
+    extraction_id: str,
+    validated_by: str,
+    validation_notes: str | None = None,
+    **legacy_kwargs,
+) -> dict:
+    res = await call_function(
+        "sp_validate_extraction",
+        extraction_id, validated_by, validation_notes,
+    )
+    if not res.ok:
+        if res.errornumber == 1016:
+            # Already validated — surface as a soft success.
+            return res.result or {"extraction_id": extraction_id, "validated": True, "already": True}
+        if res.errornumber in (1008, 1012, 1014):
+            raise ValueError(res.errormessage)
+        raise RuntimeError(res.errormessage)
+    return res.result
+
+
+# proc_get_extraction: defined earlier (line ~1483) as the call_proc-based
+# wrapper that dispatches to the registered _fn_get_extraction stub. Same
+# single-source-of-truth rule as proc_list_extractions — the stub does the
+# real DB call + recent_edits + raw_data JSONB parsing. The duplicate
+# direct-call (call_function) variant that lived here was removed.
+
+
+# proc_list_extractions: defined earlier (line ~1490) as the call_proc-based
+# wrapper that dispatches to the registered _fn_list_extractions stub. The
+# stub does the real DB call PLUS a follow-up raw_data merge that the AI
+# Validation page needs. Keeping the wrapper single-shape (via the registry)
+# means the merge always fires regardless of how the route invokes it.
+# The direct-call (call_function) variant that lived here was removed —
+# it bypassed the raw_data merge and would have broken the frontend.
+
+

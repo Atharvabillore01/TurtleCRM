@@ -1,7 +1,22 @@
 import React, { useEffect, useMemo, useState } from "react";
 import AiValidationView from "../components/ai-validation/AiValidationView";
 import { attributes, clientProfiles as mockClientProfiles, initialTeamMembers } from "../data/mockData";
-import { fetchExtractions, extractionToMeetingValues } from "../api/meetingApi";
+import {
+  fetchExtractions,
+  extractionToMeetingValues,
+  patchExtractionFields,
+  validateExtraction,
+  FIELD_ID_TO_ATTR_ID,
+} from "../api/meetingApi";
+
+// Reverse of FIELD_ID_TO_ATTR_ID — used to translate the UI's attribute id
+// (e.g. "clientName") back to the 174-field numeric id the patch SP expects.
+// Keys are strings because sp_patch_extraction_fields takes field_id as TEXT.
+const ATTR_ID_TO_FIELD_ID: Record<string, string> = Object.entries(FIELD_ID_TO_ATTR_ID)
+  .reduce<Record<string, string>>((acc, [fieldId, attrId]) => {
+    if (!acc[attrId]) acc[attrId] = fieldId;
+    return acc;
+  }, {});
 
 const MEETING_TASK_SEEDS = {
   default: [
@@ -72,6 +87,13 @@ export default function AiValidationPage() {
           })),
         };
         setClientProfiles([liveProfile]);
+        // Seed the per-extraction version map for optimistic concurrency.
+        // Each "meeting" in the UI maps to one extraction (meeting.id === extraction.id).
+        const versions: Record<string, number> = {};
+        for (const e of extractions) {
+          versions[e.id] = e.version ?? 1;
+        }
+        setExtractionVersions(versions);
         if (liveProfile.meetings[0]) {
           setSelectedMeetingId(liveProfile.meetings[0].id);
         }
@@ -88,6 +110,9 @@ export default function AiValidationPage() {
   const [draftValues, setDraftValues] = useState<Record<string, any>>({});
   const [editingKey, setEditingKey] = useState<any>(null);
   const [taskState, setTaskState] = useState<Record<string, any>>({});
+  // Per-extraction version map for optimistic concurrency on sp_patch_extraction_fields.
+  // Populated on extraction load and bumped after every successful patch.
+  const [extractionVersions, setExtractionVersions] = useState<Record<string, number>>({});
 
   const recentMeetings = useMemo(
     () =>
@@ -216,17 +241,76 @@ export default function AiValidationPage() {
   const approvedCount = rows.filter((r) => r.isApproved).length;
   const rejectedCount = rows.filter((r) => r.isRejected).length;
 
-  function handleSave(attributeId: any) {
-    setEditedValues((c) => ({ ...c, [`${selectedMeeting.id}:${attributeId}`]: draftValues[attributeId]?.trim() || null }));
-    setEditingKey(null);
+  // Persist an edit through to the meeting-service. The server records the
+  // change in extraction_field_audit and bumps the extraction's version.
+  // Optimistic UI: local state updates immediately, server call follows.
+  async function persistFieldEdit(
+    attributeId: string,
+    newValue: any,
+    opts: { confidence: number; source: string; reason?: string },
+  ) {
+    const extractionId = selectedMeeting.id;
+    const fieldId = ATTR_ID_TO_FIELD_ID[attributeId];
+    if (!fieldId) {
+      // Attribute isn't in the 174-field map yet — nothing to persist.
+      // Falls back to local-only state (existing behaviour for unmapped attrs).
+      return;
+    }
+    const expectedVersion = extractionVersions[extractionId] ?? 1;
+    try {
+      const res = await patchExtractionFields(extractionId, expectedVersion, [
+        { field_id: fieldId, value: newValue, ...opts },
+      ]);
+      setExtractionVersions((v) => ({ ...v, [extractionId]: res.version }));
+    } catch (e: any) {
+      // On version mismatch the server returns 409 with current_version.
+      // For now, surface to console; a future refinement is a toast + auto-reload.
+      console.error("persist field edit failed", { attributeId, fieldId, error: e?.message });
+    }
   }
+
+  function handleSave(attributeId: any) {
+    const raw = draftValues[attributeId];
+    const value = typeof raw === "string" ? raw.trim() || null : raw ?? null;
+    // Local state update first so the UI feels instant.
+    setEditedValues((c) => ({ ...c, [`${selectedMeeting.id}:${attributeId}`]: value }));
+    setEditingKey(null);
+    // Fire-and-forget DB write — errors logged, no UI block.
+    void persistFieldEdit(attributeId, value, {
+      confidence: 1.0,
+      source: "reviewer",
+      reason: "edited in AI Validation",
+    });
+  }
+
   function handleApprove(attributeId: any, value: any) {
     setApprovedValues((c) => ({ ...c, [`${selectedClient.id}:${attributeId}`]: value }));
     setRejectedValues((c) => { const n = { ...c }; delete n[`${selectedMeeting.id}:${attributeId}`]; return n; });
+    void persistFieldEdit(attributeId, value, {
+      confidence: 1.0,
+      source: "reviewer",
+      reason: "approved in AI Validation",
+    });
   }
+
   function handleReject(attributeId: any) {
+    // Reject is UI-only for now — no DB column for "this field was rejected".
+    // Persist later as an audit event or a dedicated table if business needs it.
     setRejectedValues((c) => ({ ...c, [`${selectedMeeting.id}:${attributeId}`]: true }));
   }
+
+  // Finalise the whole extraction. Wire to the AiValidationView submit button
+  // once the design exposes one; for now the handler is available via the
+  // exported helper.
+  async function handleValidateAll(notes?: string) {
+    try {
+      await validateExtraction(selectedMeeting.id, notes);
+    } catch (e: any) {
+      console.error("validate extraction failed", e?.message);
+    }
+  }
+  // Suppress unused-warning until the view wires it.
+  void handleValidateAll;
 
   return (
     <AiValidationView

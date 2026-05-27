@@ -7,6 +7,7 @@ class Settings(BaseSettings):
     node_env: str = "development"
     auth_service_port: int = 4000
 
+    database_url: str = "postgresql://devadmin:StrongPassword123!@13.207.65.145:5432/qadb_turtle01"
     redis_url: str = "redis://localhost:6379"
     redis_password: str = "changeme"
 

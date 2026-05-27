@@ -17,6 +17,7 @@ from routes.refresh import router as refresh_router
 from logger import get_logger
 from db.outbox_procs import register_outbox_mocks
 from db.team_procs import register_team_mocks
+from db.pool import init_pool, close_pool
 
 logger = get_logger("auth-service")
 
@@ -26,11 +27,13 @@ async def lifespan(app: FastAPI):
     register_outbox_mocks()
     register_team_mocks()
     logger.info("auth-service starting up", extra={"env": settings.node_env})
+    await init_pool(settings.database_url)
+    logger.info("db pool ready")
     await _get_exchange()
     logger.info("rabbitmq publisher connected")
     yield
     logger.info("auth-service shutting down")
-    await asyncio.gather(disconnect(), close_redis(), return_exceptions=True)
+    await asyncio.gather(disconnect(), close_redis(), close_pool(), return_exceptions=True)
 
 
 app = FastAPI(title="auth-service", lifespan=lifespan)
