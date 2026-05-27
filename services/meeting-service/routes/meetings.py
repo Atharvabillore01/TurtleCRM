@@ -99,29 +99,32 @@ async def schedule_meeting(
         req.advisor_ids or ([req.advisor_id] if req.advisor_id else [])
     )
 
-    meeting_id = await proc_schedule_meeting(
-        title=req.title or req.agenda,
-        description="",
-        event_type="general",
-        start_time=req.scheduled_at,
-        duration_minutes=req.duration_minutes,
-        timezone=settings.google_calendar_timezone or "Asia/Kolkata",
-        source="manual",
-        created_by=str(team_user_id),
-        booked_by=str(team_user_id),
-        agenda=req.agenda,
-        google_meet_link=req.meeting_url or None,
-        client_user_ids=client_user_ids,
-        adviser_user_ids=adviser_user_ids,
-        agents_to_use=req.agents_to_use,
-        metadata={
-            "guests":     req.guests,
-            "notes":      req.notes,
-            "member":     req.member,
-            "client_name":  req.client_name,
-            "advisor_name": req.advisor_name,
-        },
-    )
+    try:
+        meeting_id = await proc_schedule_meeting(
+            title=req.title or req.agenda,
+            description="",
+            event_type="general",
+            start_time=req.scheduled_at,
+            duration_minutes=req.duration_minutes,
+            timezone=settings.google_calendar_timezone or "Asia/Kolkata",
+            source="manual",
+            created_by=str(team_user_id),
+            booked_by=str(team_user_id),
+            agenda=req.agenda,
+            google_meet_link=req.meeting_url or None,
+            client_user_ids=client_user_ids,
+            adviser_user_ids=adviser_user_ids,
+            agents_to_use=req.agents_to_use,
+            metadata={
+                "guests":     req.guests,
+                "notes":      req.notes,
+                "member":     req.member,
+                "client_name":  req.client_name,
+                "advisor_name": req.advisor_name,
+            },
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
     # ── Step 1: auto-create Google Meet + send calendar invites ─────────────────
     # Uses the Service Account + Domain-Wide Delegation (impersonates

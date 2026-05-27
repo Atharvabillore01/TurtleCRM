@@ -51,7 +51,7 @@ function meetingRecordToRow(m: any) {
 }
 
 export default function SchedulingPage() {
-  const { userId } = useAuth();
+  const { userId, name, email } = useAuth();
   const [records, setRecords] = useState<any[]>([]);
   const [search, setSearch] = useState("");
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -61,6 +61,18 @@ export default function SchedulingPage() {
   const [agentOptions, setAgentOptions] = useState<AgentOption[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+
+  // Booked-by / member identity comes from the logged-in JWT — never typed.
+  // The server already derives created_by + booked_by from the auth context;
+  // the form fields are kept as display-only metadata for the list view.
+  useEffect(() => {
+    if (!name && !email) return;
+    setForm((current: any) => ({
+      ...current,
+      bookedBy: name || email || "",
+      member:   name || email || "",
+    }));
+  }, [name, email]);
 
   useEffect(() => {
     fetchMeetings()
@@ -118,7 +130,13 @@ export default function SchedulingPage() {
     const primaryAdvisor = advisors[0];
     // Backend expects ISO-8601 (datetime.fromisoformat). form.date is YYYY-MM-DD,
     // form.time is HH:MM — combine as a local datetime, then serialise to UTC ISO.
-    const scheduledAt = new Date(`${form.date}T${form.time}:00`).toISOString();
+    const scheduledDate = new Date(`${form.date}T${form.time}:00`);
+    if (scheduledDate.getTime() <= Date.now()) {
+      setSubmitError("Meeting time must be in the future.");
+      setIsSubmitting(false);
+      return;
+    }
+    const scheduledAt = scheduledDate.toISOString();
 
     try {
       const result = await scheduleMeeting({

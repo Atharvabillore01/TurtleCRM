@@ -54,3 +54,8 @@ coverage/
 # ─── Misc ─────────────────────────────────────────────────────────────────────
 *.pem
 *.keytranscripts/
+
+# ─── Database dumps / SP exports ─────────────────────────────────────────────
+procs/
+procs.zip
+turtle - Copy/

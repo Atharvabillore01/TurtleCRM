@@ -52,35 +52,15 @@ export default function SchedulingModal({
           <div className="col-span-2 flex items-start justify-between gap-4 px-[18px] py-4 border border-[rgba(46,222,190,0.22)] rounded-2xl bg-gradient-to-b from-[#f7fffd] to-[#eefcf8] mobile:col-span-1 mobile:flex-col">
             <div>
               <span className="text-green-dark text-[11px] font-black tracking-[0.08em] uppercase">Booked By</span>
-              <strong className="block">{formValues.bookedBy || "Ops team member"}</strong>
+              <strong className="block">{formValues.bookedBy || "Signed-in team member"}</strong>
               <p className="mt-1.5 text-muted text-[13px] m-0">
-                Name: {formValues.bookedBy || "Enter below"} | Status: {formValues.status}
+                Auto-filled from your login | Status: {formValues.status}
               </p>
             </div>
             <span className="inline-flex items-center min-h-[26px] px-[10px] rounded-full bg-[#138773] text-white text-[11px] font-black">
               YOU
             </span>
           </div>
-
-          <label className="col-span-2 grid gap-2 mobile:col-span-1">
-            <span className="text-xs font-extrabold text-muted uppercase">Booked by</span>
-            <input
-              className="form-field w-full min-h-[42px] px-3 py-[10px] border border-line rounded-[10px] outline-none bg-white transition-[border-color,box-shadow] duration-[160ms] ease-in"
-              value={formValues.bookedBy}
-              onChange={(event) => onChange("bookedBy", event.target.value)}
-              placeholder="Person name"
-            />
-          </label>
-
-          <label className="grid gap-2">
-            <span className="text-xs font-extrabold text-muted uppercase">Member</span>
-            <input
-              className="form-field w-full min-h-[42px] px-3 py-[10px] border border-line rounded-[10px] outline-none bg-white transition-[border-color,box-shadow] duration-[160ms] ease-in"
-              value={formValues.member}
-              onChange={(event) => onChange("member", event.target.value)}
-              placeholder="Ops team member"
-            />
-          </label>
 
           <div className="col-span-2 grid gap-1 px-4 py-[14px] border border-line rounded-[14px] bg-gradient-to-b from-[rgba(245,255,252,0.95)] to-white mobile:col-span-1">
             <span className="text-green-dark text-[11px] font-black tracking-[0.08em] uppercase">Client &amp; advisors</span>
@@ -173,6 +153,7 @@ export default function SchedulingModal({
             <input
               className="form-field w-full min-h-[42px] px-3 py-[10px] border border-line rounded-[10px] outline-none bg-white transition-[border-color,box-shadow] duration-[160ms] ease-in"
               type="date"
+              min={new Date().toISOString().slice(0, 10)}
               value={formValues.date}
               onChange={(event) => onChange("date", event.target.value)}
             />
