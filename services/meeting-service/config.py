@@ -10,7 +10,10 @@ class Settings(BaseSettings):
     # Shared JWT secret — must match auth-service.jwt_secret so auth_dep can verify tokens.
     jwt_secret: str = "changeme_jwt_secret_min_32_chars"
 
-    database_url: str = "postgresql://devadmin:StrongPassword123!@13.207.65.145:5432/qadb_turtle01"
+    # DATABASE_URL must be provided via env (.env or container). Empty default
+    # so a missing value fails fast at pool init rather than silently using a
+    # hardcoded credential committed to source.
+    database_url: str = ""
     rabbitmq_url: str = "amqp://turtle:changeme@localhost:5672"
     redis_url: str = "redis://localhost:6379"
     crm_ai_service_url: str = "http://localhost:5000"
