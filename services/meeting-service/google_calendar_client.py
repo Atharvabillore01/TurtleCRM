@@ -84,11 +84,15 @@ def _create_event_sync(
     start_dt = _parse_datetime(scheduled_at)
     end_dt = start_dt + timedelta(minutes=duration_minutes)
 
+    # Google Calendar treats a naive dateTime string as wall time in `timeZone`.
+    # Our start_dt is tz-aware UTC (parsed from an ISO with Z/offset). Emit it as
+    # a full RFC3339 string with offset; `timeZone` then only controls the
+    # display zone on the invite — the instant itself is unambiguous.
     event_body = {
         "summary": title,
         "description": agenda,
-        "start": {"dateTime": start_dt.strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": tz},
-        "end":   {"dateTime": end_dt.strftime("%Y-%m-%dT%H:%M:%S"),   "timeZone": tz},
+        "start": {"dateTime": start_dt.isoformat(), "timeZone": tz},
+        "end":   {"dateTime": end_dt.isoformat(),   "timeZone": tz},
         "attendees": [{"email": e} for e in attendee_emails if e],
         "guestsCanInviteOthers": True,
         "guestsCanSeeOtherGuests": True,

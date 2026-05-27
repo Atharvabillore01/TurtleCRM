@@ -1375,8 +1375,10 @@ async def proc_list_extractions(validated: bool | None = None) -> list[dict]:
 # but the public wrappers used by routes go through the real DB.
 # ─────────────────────────────────────────────────────────────────────────────
 
-from datetime import datetime as _dt
+from datetime import datetime as _dt, timezone as _tz
 from uuid import UUID as _UUID
+
+timezone_utc = _tz.utc
 
 
 def _normalise_uuid_list(values) -> list[str]:
@@ -1425,6 +1427,13 @@ async def proc_schedule_meeting(
         )
     except Exception as exc:
         raise ValueError(f"could not parse start_time: {exc}")
+
+    # Reject past meetings. Compare in UTC: tz-naive inputs are interpreted as
+    # local (server) wall time, which on the container is UTC — same basis.
+    now_utc = _dt.now(timezone_utc)
+    start_for_check = start_dt if start_dt.tzinfo else start_dt.replace(tzinfo=timezone_utc)
+    if start_for_check <= now_utc:
+        raise ValueError("Meeting start_time must be in the future.")
 
     if end_time is None:
         end_dt = start_dt + timedelta(minutes=duration_minutes)
