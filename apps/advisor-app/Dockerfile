@@ -22,7 +22,7 @@ COPY apps/advisor-app/vite.config.ts ./apps/advisor-app/vite.config.ts
 COPY apps/advisor-app/tailwind.config.js  ./apps/advisor-app/tailwind.config.js
 COPY apps/advisor-app/postcss.config.js   ./apps/advisor-app/postcss.config.js
 
-ARG VITE_AUTH_SERVICE_URL=http://localhost:4000
+ARG VITE_AUTH_SERVICE_URL=
 ENV VITE_AUTH_SERVICE_URL=$VITE_AUTH_SERVICE_URL
 
 WORKDIR /repo/apps/advisor-app

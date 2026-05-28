@@ -4,7 +4,7 @@ import axios, {
   type AxiosResponse,
 } from "axios";
 
-const BASE_URL = import.meta.env["VITE_AUTH_SERVICE_URL"] ?? "http://localhost:4000";
+const BASE_URL = import.meta.env["VITE_AUTH_SERVICE_URL"] ?? "";
 
 // Module-level token store — set by AuthContext, read by interceptor
 let _accessToken: string | null = null;

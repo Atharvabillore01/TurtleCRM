@@ -22,9 +22,9 @@ COPY apps/internal-app/vite.config.ts ./apps/internal-app/vite.config.ts
 COPY apps/internal-app/tailwind.config.js  ./apps/internal-app/tailwind.config.js
 COPY apps/internal-app/postcss.config.js   ./apps/internal-app/postcss.config.js
 
-ARG VITE_AUTH_SERVICE_URL=http://localhost:4000
-ARG VITE_USER_SERVICE_URL=http://localhost:4002
-ARG VITE_MEETING_SERVICE_URL=http://localhost:4004
+ARG VITE_AUTH_SERVICE_URL=
+ARG VITE_USER_SERVICE_URL=
+ARG VITE_MEETING_SERVICE_URL=
 ARG VITE_SHOW_DEV_TOGGLE=false
 
 ENV VITE_AUTH_SERVICE_URL=$VITE_AUTH_SERVICE_URL

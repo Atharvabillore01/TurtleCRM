@@ -28,7 +28,7 @@ COPY apps/client-app/tailwind.config.js  ./apps/client-app/tailwind.config.js
 COPY apps/client-app/postcss.config.js   ./apps/client-app/postcss.config.js
 
 # Inject the runtime API URL so Vite bakes it into the bundle
-ARG VITE_AUTH_SERVICE_URL=http://localhost:4000
+ARG VITE_AUTH_SERVICE_URL=
 ENV VITE_AUTH_SERVICE_URL=$VITE_AUTH_SERVICE_URL
 
 WORKDIR /repo/apps/client-app
