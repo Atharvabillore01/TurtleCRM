@@ -220,7 +220,7 @@ services:
       context: .
       dockerfile: apps/client-app/Dockerfile
       args:
-        VITE_AUTH_SERVICE_URL: ${VITE_AUTH_SERVICE_URL:-http://localhost:4000}
+        VITE_AUTH_SERVICE_URL: ${VITE_AUTH_SERVICE_URL:-}
     restart: unless-stopped
     ports:
       - "3000:3000"
@@ -242,7 +242,7 @@ services:
       context: .
       dockerfile: apps/advisor-app/Dockerfile
       args:
-        VITE_AUTH_SERVICE_URL: ${VITE_AUTH_SERVICE_URL:-http://localhost:4000}
+        VITE_AUTH_SERVICE_URL: ${VITE_AUTH_SERVICE_URL:-}
     restart: unless-stopped
     ports:
       - "3001:3001"
@@ -264,10 +264,10 @@ services:
       context: .
       dockerfile: apps/internal-app/Dockerfile
       args:
-        VITE_AUTH_SERVICE_URL: ${VITE_AUTH_SERVICE_URL:-http://localhost:4000}
-        VITE_USER_SERVICE_URL: ${VITE_USER_SERVICE_URL:-http://localhost:4002}
-        VITE_MEETING_SERVICE_URL: ${VITE_MEETING_SERVICE_URL:-http://localhost:4004}
-        VITE_SHOW_DEV_TOGGLE: ${VITE_SHOW_DEV_TOGGLE:-true}
+        VITE_AUTH_SERVICE_URL: ${VITE_AUTH_SERVICE_URL:-}
+        VITE_USER_SERVICE_URL: ${VITE_USER_SERVICE_URL:-}
+        VITE_MEETING_SERVICE_URL: ${VITE_MEETING_SERVICE_URL:-}
+        VITE_SHOW_DEV_TOGGLE: ${VITE_SHOW_DEV_TOGGLE:-false}
     restart: unless-stopped
     ports:
       - "3002:3002"
