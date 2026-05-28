@@ -121,7 +121,7 @@ export default function AiValidationPage() {
           client.meetings.map((meeting: any) => ({ client, meeting })),
         )
         .sort((a: any, b: any) => new Date(b.meeting.date).getTime() - new Date(a.meeting.date).getTime()),
-    [],
+    [clientProfiles],
   );
 
   const selectedPair = useMemo(
@@ -130,6 +130,42 @@ export default function AiValidationPage() {
       recentMeetings[0],
     [recentMeetings, selectedMeetingId],
   );
+
+  // Compute these BEFORE any early return so the hook order is identical on
+  // every render (React error #310 otherwise).
+  const selectedClient = selectedPair?.client;
+  const selectedMeeting = selectedPair?.meeting;
+
+  const currentTaskState = useMemo(() => {
+    if (!selectedMeeting) return { suggestions: [], active: [], rejected: [] };
+    if (taskState[selectedMeeting.id]) return taskState[selectedMeeting.id];
+    return {
+      suggestions: getSuggestionsForMeeting(selectedMeeting.id, selectedMeeting.name),
+      active: [],
+      rejected: [],
+    };
+  }, [taskState, selectedMeeting?.id, selectedMeeting?.name]);
+
+  const rows = useMemo(() => {
+    if (!selectedMeeting || !selectedClient) return [] as any[];
+    return (attributes as any[]).map((attribute: any) => {
+      const editKey = `${selectedMeeting.id}:${attribute.id}`;
+      const approvalKey = `${selectedClient.id}:${attribute.id}`;
+      const rejectedKey = `${selectedMeeting.id}:${attribute.id}`;
+      const editedValue = editedValues[editKey];
+      const approvedValue = approvedValues[approvalKey];
+      const meetingValue = selectedMeeting.values?.[attribute.id];
+      const displayValue = approvedValue ?? editedValue ?? meetingValue ?? null;
+      const isNull = displayValue === null || displayValue === "";
+      return {
+        attribute,
+        displayValue,
+        isNull,
+        isApproved: approvedValue !== undefined,
+        isRejected: rejectedValues[rejectedKey] === true,
+      };
+    });
+  }, [approvedValues, editedValues, rejectedValues, selectedClient?.id, selectedMeeting]);
 
   // Empty / loading / error states — nothing to render against.
   if (loading) {
@@ -154,18 +190,6 @@ export default function AiValidationPage() {
       </div>
     );
   }
-
-  const selectedClient = selectedPair.client;
-  const selectedMeeting = selectedPair.meeting;
-
-  const currentTaskState = useMemo(() => {
-    if (taskState[selectedMeeting.id]) return taskState[selectedMeeting.id];
-    return {
-      suggestions: getSuggestionsForMeeting(selectedMeeting.id, selectedMeeting.name),
-      active: [],
-      rejected: [],
-    };
-  }, [taskState, selectedMeeting.id, selectedMeeting.name]);
 
   function updateTaskState(meetingId: any, updater: any) {
     setTaskState((prev: any) => {
@@ -215,26 +239,6 @@ export default function AiValidationPage() {
       active: [...s.active, { ...task, id: `MT-${Date.now()}`, type: "manual" }],
     }));
   }
-
-  const rows = useMemo(() => {
-    return (attributes as any[]).map((attribute: any) => {
-      const editKey = `${selectedMeeting.id}:${attribute.id}`;
-      const approvalKey = `${selectedClient.id}:${attribute.id}`;
-      const rejectedKey = `${selectedMeeting.id}:${attribute.id}`;
-      const editedValue = editedValues[editKey];
-      const approvedValue = approvedValues[approvalKey];
-      const meetingValue = selectedMeeting.values[attribute.id];
-      const displayValue = approvedValue ?? editedValue ?? meetingValue ?? null;
-      const isNull = displayValue === null || displayValue === "";
-      return {
-        attribute,
-        displayValue,
-        isNull,
-        isApproved: approvedValue !== undefined,
-        isRejected: rejectedValues[rejectedKey] === true,
-      };
-    });
-  }, [approvedValues, editedValues, rejectedValues, selectedClient.id, selectedMeeting]);
 
   const filledCount = rows.filter((r) => !r.isNull).length;
   const missingCount = rows.filter((r) => r.isNull).length;

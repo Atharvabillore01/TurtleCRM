@@ -6,12 +6,9 @@ row lookup), POSTs to the AI extraction agent at CRM_AI_SERVICE_URL/extract,
 saves the extraction, and emits the downstream events.
 """
 
-import json
-import os
 import time
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
 
 import httpx
 
@@ -20,16 +17,6 @@ from db.meeting_procs import proc_save_extraction
 from eventbus import publish_event, start_consumer
 from logger import get_logger
 from metrics import extractions_completed_total
-
-EXTRACTIONS_DIR = Path(os.environ.get("TRANSCRIPTS_DIR", "/app/transcripts")) / "extractions"
-
-
-def _save_extraction_to_file(extraction_id: str, meeting_id: str,
-                             firefly_meeting_id: str, payload: dict) -> Path:
-    EXTRACTIONS_DIR.mkdir(parents=True, exist_ok=True)
-    path = EXTRACTIONS_DIR / f"{meeting_id}_{extraction_id}.json"
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    return path
 
 logger = get_logger("meeting-service")
 
@@ -108,27 +95,8 @@ async def _handle_transcribed(payload: dict) -> None:
         "duration_seconds": round(duration, 3),
     })
 
-    try:
-        saved_path = _save_extraction_to_file(
-            extraction_id=extraction_id,
-            meeting_id=meeting_id,
-            firefly_meeting_id=firefly_meeting_id,
-            payload={
-                "extraction_id":      extraction_id,
-                "meeting_id":         meeting_id,
-                "firefly_meeting_id": firefly_meeting_id,
-                "client_id":          client_id,
-                "agenda":             agenda,
-                "agents_to_use":      agents_to_use,
-                "model":              extraction_data.get("model", "unknown"),
-                "duration_seconds":   round(duration, 3),
-                "extracted_at":       datetime.now(timezone.utc).isoformat(),
-                "fields":             extraction_data.get("fields", extraction_data),
-            },
-        )
-        logger.info("extraction_file_saved", extra={"path": str(saved_path)})
-    except Exception as exc:
-        logger.error("extraction_file_save_failed", extra={"error": str(exc)})
+    # Local JSON dump removed — sp_save_extraction stores the full raw_data
+    # JSONB on the extractions row; that is the authoritative copy.
 
     await publish_event("extraction.completed", {
         "extraction_id": extraction_id,

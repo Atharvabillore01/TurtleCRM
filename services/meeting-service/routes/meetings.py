@@ -139,6 +139,8 @@ async def schedule_meeting(
             *([] if not req.advisor_email or req.advisor_email in req.advisor_emails else [req.advisor_email]),
             *req.guests,
             "talk@turtlefinance.in",
+            # Fireflies bot — invite it so it joins, records, and the webhook fires.
+            (settings.firefly_bot_email or "").strip() or None,
         ]))
         cal_result = await create_meet_event(
             settings=settings,

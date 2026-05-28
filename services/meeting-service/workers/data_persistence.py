@@ -44,7 +44,11 @@ async def _handle_save(payload: dict) -> None:
         logger.error("data_persistence_extraction_not_found", extra={"error": str(exc), "extraction_id": extraction_id})
         return
 
-    raw = extraction.raw_data
+    # proc_get_extraction returns the SP's dict shape: { extraction_id, ..., raw_data: { "1": {...}, "2": {...}, ... } }.
+    raw = extraction["raw_data"] if isinstance(extraction, dict) else extraction.raw_data
+    if not isinstance(raw, dict):
+        logger.warning("data_persistence_empty_raw_data", extra={"extraction_id": extraction_id})
+        return
 
     try:
         await proc_save_demographics(
