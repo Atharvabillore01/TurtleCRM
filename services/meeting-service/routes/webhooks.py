@@ -31,41 +31,6 @@ logger = get_logger("meeting-service")
 
 TRANSCRIPTS_DIR = Path(os.environ.get("TRANSCRIPTS_DIR", "/app/transcripts"))
 
-# Hardcoded meeting context per Meet URL — temporary stand-in for a DB lookup.
-# When Fireflies' transcript meeting_link matches a key here, the dict value is
-# attached to the published event so the agent worker has client_id +
-# agents_to_use without a DB row.
-# TODO: replace with `proc_find_by_meet_url(meet_url)` once meetings rows exist.
-ALLOWED_MEETINGS: dict[str, dict] = {
-    "https://meet.google.com/jec-cfnd-wdg": {
-        "meeting_id":    "test-meeting-001",
-        "client_id":     "client_2",
-        "agenda":        "Initial Consultation — Financial Planning",
-        "agents_to_use": [
-            "DemographicsAgent",
-            "FinanceAgent",
-            "GoalsAgent",
-            "ProfessionalAgent",
-            "QualitativeAgent",
-            "SystemResolver",
-        ],
-    },
-}
-
-
-def _normalize(url: str) -> str:
-    return url.strip().rstrip("/").lower()
-
-
-def _lookup_meeting_context(meet_url: str) -> dict | None:
-    if not meet_url:
-        return None
-    target = _normalize(meet_url)
-    for url, ctx in ALLOWED_MEETINGS.items():
-        if _normalize(url) == target:
-            return ctx
-    return None
-
 TRANSCRIBED_EVENTS = {
     "meeting.transcribed",
     "Transcription completed",
@@ -154,8 +119,58 @@ async def firefly_webhook(request: Request):
     return {"received": True}
 
 
-async def _handle_transcript_ready(firefly_meeting_id: str) -> None:
-    """Fetch the transcript from Fireflies, save to disk, publish meeting.transcribed."""
+@router.post("/firefly/replay", status_code=status.HTTP_200_OK)
+async def firefly_webhook_replay(request: Request):
+    """
+    Dev-only replay endpoint. Skips HMAC, accepts:
+        { "firefly_meeting_id": "<id>", "meet_url": "<https://meet.google.com/...>" }
+    Use `meet_url` to point the lookup at a meeting you scheduled locally
+    instead of whatever Meet URL Fireflies recorded for the original meeting.
+    Disabled in production.
+    """
+    if settings.node_env == "production":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+
+    body = await request.body()
+    try:
+        payload = json.loads(body) if body else {}
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid JSON body: {exc.msg} at char {exc.pos}",
+        )
+    firefly_meeting_id = (
+        payload.get("firefly_meeting_id")
+        or payload.get("meeting_id")
+        or ""
+    )
+    meet_url_override = payload.get("meet_url") or None
+
+    if not firefly_meeting_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="firefly_meeting_id is required",
+        )
+
+    logger.info("firefly_replay_invoked", extra={
+        "firefly_meeting_id": firefly_meeting_id,
+        "meet_url_override":  meet_url_override,
+    })
+    await _handle_transcript_ready(firefly_meeting_id, meet_url_override=meet_url_override)
+    return {"replayed": True, "firefly_meeting_id": firefly_meeting_id}
+
+
+async def _handle_transcript_ready(
+    firefly_meeting_id: str,
+    meet_url_override: str | None = None,
+) -> None:
+    """Fetch the transcript from Fireflies, save to disk, publish meeting.transcribed.
+
+    `meet_url_override` is for the dev replay endpoint only — when set, the
+    Meet URL returned by Fireflies is ignored and the override is used for
+    the meeting-row lookup. Lets developers replay a real Fireflies
+    meeting_id against a meeting they just scheduled locally.
+    """
     if not settings.firefly_api_key:
         logger.warning("firefly_api_key_missing", extra={"firefly_meeting_id": firefly_meeting_id})
         return
@@ -173,30 +188,41 @@ async def _handle_transcript_ready(firefly_meeting_id: str) -> None:
         return
 
     transcript_text = result["text"] or "[transcript unavailable]"
-    meet_url = result["meeting_link"]
+    meet_url = meet_url_override or result["meeting_link"]
     title = result["title"]
     transcript_url = result["transcript_url"]
     duration = result["duration"]
-
-    # Prefer a real scheduled meeting row (carries ops-selected agents_to_use).
-    # Fall back to ALLOWED_MEETINGS only for ad-hoc/test meetings without a row.
-    meeting_row = proc_find_meeting_by_meet_url(meet_url)
-    if meeting_row is not None:
-        ctx = {
-            "meeting_id":    meeting_row.id,
-            "client_id":     meeting_row.client_id,
-            "agenda":        meeting_row.agenda,
-            "agents_to_use": list(meeting_row.agents_to_use or []),
-        }
-    else:
-        ctx = _lookup_meeting_context(meet_url)
-    if ctx is None:
-        logger.info("firefly_transcript_skipped_meet_url_filter", extra={
+    if meet_url_override:
+        logger.info("firefly_meet_url_override_active", extra={
             "firefly_meeting_id": firefly_meeting_id,
-            "meet_url": meet_url,
-            "allowed": list(ALLOWED_MEETINGS.keys()),
+            "from_fireflies": result["meeting_link"],
+            "override":       meet_url_override,
+        })
+
+    # Find the scheduled meeting row by Meet URL. fn_find_meeting_by_meet_url
+    # returns a dict (or None) with: id, agenda, agents_to_use (list),
+    # client_user_ids (list of str UUIDs), adviser_user_ids, metadata, …
+    try:
+        meeting_row = await proc_find_meeting_by_meet_url(meet_url)
+    except Exception as exc:
+        logger.error("firefly_meeting_lookup_failed", extra={
+            "error": str(exc), "meet_url": meet_url,
         })
         return
+    if meeting_row is None:
+        logger.info("firefly_transcript_no_matching_meeting", extra={
+            "firefly_meeting_id": firefly_meeting_id,
+            "meet_url": meet_url,
+        })
+        return
+
+    client_user_ids = meeting_row.get("client_user_ids") or []
+    ctx = {
+        "meeting_id":    meeting_row["id"],
+        "client_id":     client_user_ids[0] if client_user_ids else "",
+        "agenda":        meeting_row.get("agenda") or "",
+        "agents_to_use": list(meeting_row.get("agents_to_use") or []),
+    }
 
     try:
         saved_path = _save_transcript_to_file(

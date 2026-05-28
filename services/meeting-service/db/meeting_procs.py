@@ -1489,13 +1489,47 @@ async def proc_save_meeting_external_sync(
 
 
 async def proc_find_meeting_by_meet_url(meet_url: str) -> dict | None:  # type: ignore[override]
-    """Look up the meeting + agents_to_use + attendee context by Meet URL."""
+    """
+    Look up the meeting + agents_to_use + attendee context by Meet URL.
+
+    fn_find_meeting_by_meet_url is a plain TABLE-returning function (no 4-col
+    envelope), so we bypass call_function and fetchrow directly. Returns a
+    dict with the SP's column shape, or None when no match.
+
+    Columns returned:
+      id, title, status, agenda, agents_to_use (JSONB), metadata (JSONB),
+      meeting_url, client_user_ids (UUID[]), adviser_user_ids (UUID[]).
+    """
     if not meet_url:
         return None
-    res = await call_function("fn_find_meeting_by_meet_url", meet_url)
-    if not res.ok:
-        raise RuntimeError(res.errormessage)
-    return res.result  # may be None if no match
+
+    from db.pool import get_pool
+    import json as _json
+
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM fn_find_meeting_by_meet_url($1::text)",
+            meet_url,
+        )
+
+    if row is None:
+        return None
+
+    d = dict(row)
+    # Stringify UUIDs / UUID[] / JSONB so downstream JSON-serialises cleanly.
+    if isinstance(d.get("id"), uuid.UUID):
+        d["id"] = str(d["id"])
+    for k in ("client_user_ids", "adviser_user_ids"):
+        v = d.get(k) or []
+        d[k] = [str(x) for x in v]
+    for k in ("agents_to_use", "metadata"):
+        v = d.get(k)
+        if isinstance(v, (str, bytes)):
+            try:
+                d[k] = _json.loads(v) if v else None
+            except (ValueError, TypeError):
+                pass
+    return d
 
 
 async def proc_save_transcript(
@@ -1538,10 +1572,23 @@ async def proc_save_extraction(
     import json as _json
     raw_data_json = _json.dumps(raw_data) if not isinstance(raw_data, str) else raw_data
 
+    # Normalise extracted_at: asyncpg's TIMESTAMPTZ codec rejects strings,
+    # needs a datetime instance.
+    extracted_at_dt: _dt | None
+    if extracted_at is None:
+        extracted_at_dt = None
+    elif isinstance(extracted_at, _dt):
+        extracted_at_dt = extracted_at
+    else:
+        try:
+            extracted_at_dt = _dt.fromisoformat(str(extracted_at).replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError(f"could not parse extracted_at: {exc}")
+
     res = await call_function(
         "sp_save_extraction",
         meeting_id, extraction_job_id, provider, model, raw_data_json,
-        transcript_id, extracted_at, duration_seconds, total_fields,
+        transcript_id, extracted_at_dt, duration_seconds, total_fields,
     )
     if not res.ok:
         if res.errornumber in (1008, 1014):
