@@ -58,7 +58,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (secs <= 0) return;
     refreshTimerRef.current = setTimeout(async () => {
       try {
-        const res = await fetch("http://localhost:4000/auth/refresh", {
+        const res = await fetch("/auth/refresh", {
           method:      "POST",
           credentials: "include",
           headers:     { "Content-Type": "application/json" },
@@ -89,7 +89,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     clearTimer();
     try {
-      await fetch("http://localhost:4000/auth/logout", {
+      await fetch("/auth/logout", {
         method:      "POST",
         credentials: "include",
         headers:     { "Content-Type": "application/json" },
@@ -105,7 +105,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("http://localhost:4000/auth/refresh", {
+        const res = await fetch("/auth/refresh", {
           method:      "POST",
           credentials: "include",
           headers:     { "Content-Type": "application/json" },

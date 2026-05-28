@@ -3,7 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { LoadingSpinner, ErrorMessage } from "@turtle/ui";
 import { useAuth } from "../hooks/useAuth.js";
 
-const BASE_URL = import.meta.env["VITE_AUTH_SERVICE_URL"] ?? "http://localhost:4000";
+const BASE_URL = import.meta.env["VITE_AUTH_SERVICE_URL"] ?? "";
 
 export function OAuthCallbackPage() {
   const navigate          = useNavigate();
