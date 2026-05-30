@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import SchedulingView from "../components/scheduling/SchedulingView";
 import SchedulingModal from "../components/scheduling/SchedulingModal";
+import RescheduleModal from "../components/scheduling/RescheduleModal";
 import { createEmptySchedulingForm } from "../data/mockData";
 import {
   fetchClients,
@@ -8,9 +9,14 @@ import {
   fetchMeetings,
   scheduleMeeting,
   fetchAvailableAgents,
+  cancelMeeting,
+  rescheduleMeeting,
+  newIdempotencyKey,
   AgentOption,
 } from "../api/meetingApi";
 import { useAuth } from "../hooks/useAuth.js";
+import { showApiError } from "../utils/showApiError";
+import ConfirmDialog from "../components/shared/ConfirmDialog";
 
 function meetingRecordToRow(m: any) {
   const dt = new Date(m.scheduled_at);
@@ -61,6 +67,51 @@ export default function SchedulingPage() {
   const [agentOptions, setAgentOptions] = useState<AgentOption[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [rescheduleTarget, setRescheduleTarget] = useState<any | null>(null);
+  const [cancelTarget, setCancelTarget] = useState<any | null>(null);
+  const [cancelBusy, setCancelBusy] = useState(false);
+
+  async function refreshMeetings() {
+    try {
+      const updated = await fetchMeetings();
+      setRecords(updated.map(meetingRecordToRow));
+    } catch {
+      // meeting-service unavailable — keep current state
+    }
+  }
+
+  function handleCancel(record: any) {
+    setCancelTarget(record);
+  }
+
+  async function confirmCancelMeeting() {
+    if (!cancelTarget) return;
+    setCancelBusy(true);
+    try {
+      await cancelMeeting(cancelTarget.id, {
+        reason: undefined,
+        idempotency_key: newIdempotencyKey(),
+      });
+      setCancelTarget(null);
+      await refreshMeetings();
+    } catch (err: any) {
+      showApiError(err, "Failed to cancel meeting.");
+    } finally {
+      setCancelBusy(false);
+    }
+  }
+
+  async function handleReschedule(payload: {
+    new_start_time: string; new_end_time: string; reason?: string;
+  }) {
+    if (!rescheduleTarget) return;
+    await rescheduleMeeting(rescheduleTarget.id, {
+      ...payload,
+      idempotency_key: newIdempotencyKey(),
+    });
+    setRescheduleTarget(null);
+    await refreshMeetings();
+  }
 
   // Booked-by / member identity comes from the logged-in JWT — never typed.
   // The server already derives created_by + booked_by from the auth context;
@@ -227,7 +278,35 @@ export default function SchedulingPage() {
         schedulingSearch={search}
         setSchedulingSearch={setSearch}
         onOpenModal={() => setIsModalOpen(true)}
+        onCancel={handleCancel}
+        onReschedule={(record: any) => setRescheduleTarget(record)}
       />
+
+      {rescheduleTarget && (
+        <RescheduleModal
+          record={rescheduleTarget}
+          onSubmit={handleReschedule}
+          onClose={() => setRescheduleTarget(null)}
+        />
+      )}
+
+      <ConfirmDialog
+        open={!!cancelTarget}
+        title="Cancel meeting"
+        message={
+          <>
+            Cancel the meeting <strong>"{cancelTarget?.title}"</strong>? Attendees
+            will be notified. This cannot be undone.
+          </>
+        }
+        variant="danger"
+        confirmLabel="Yes, cancel meeting"
+        cancelLabel="Keep meeting"
+        busy={cancelBusy}
+        onConfirm={confirmCancelMeeting}
+        onClose={() => !cancelBusy && setCancelTarget(null)}
+      />
+
 
       {isModalOpen && (
         <SchedulingModal

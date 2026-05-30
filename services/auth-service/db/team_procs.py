@@ -23,30 +23,38 @@ logger = logging.getLogger(__name__)
 # redeploying auth-service.
 
 async def _fn_is_internal_user_allowed(email: str) -> ProcResult:
-    """Domain-whitelist check. Empty config → deny everyone (safe default)."""
+    """
+    Membership gate: an internal Google OAuth login is allowed iff a row
+    already exists in `team_users` with this email AND `is_active = TRUE`.
+
+    Access is admin-controlled — to grant access, INSERT the row first.
+    To revoke, set `is_active = FALSE`. Domain-based allowlisting is no
+    longer consulted; the old `oauth.allowed_email_domains` config row
+    is dead weight (safe to empty or delete).
+    """
     if not email or "@" not in email:
         return ProcResult(result=False)
 
-    domain = email.lower().rsplit("@", 1)[1].strip()
+    norm_email = email.strip().lower()
 
     async with get_pool().acquire() as conn:
-        raw = await conn.fetchval(
-            "SELECT fn_get_config('oauth.allowed_email_domains', '')"
+        exists = await conn.fetchval(
+            """
+            SELECT EXISTS(
+                SELECT 1 FROM team_users
+                 WHERE lower(email) = $1
+                   AND is_active = TRUE
+            )
+            """,
+            norm_email,
         )
-
-    allowed_domains = {
-        d.strip().lower()
-        for d in (raw or "").split(",")
-        if d.strip()
-    }
-    allowed = domain in allowed_domains
 
     logger.debug(
         "[db] fn_is_internal_user_allowed",
-        extra={"email": email, "domain": domain, "allowed": allowed,
-               "allowed_domains_count": len(allowed_domains)},
+        extra={"email": norm_email, "allowed": bool(exists),
+               "gate": "team_users.email + is_active"},
     )
-    return ProcResult(result=allowed)
+    return ProcResult(result=bool(exists))
 
 
 # ── Registration ──────────────────────────────────────────────────────────────

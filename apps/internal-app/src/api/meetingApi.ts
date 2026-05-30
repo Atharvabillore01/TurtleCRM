@@ -21,6 +21,12 @@ export interface Extraction {
   duration_seconds: number;
   total_fields: number;
   raw_data: Record<string, RawField>;
+  // Joined names from the meeting row — present when fetched via /extractions.
+  meeting_title?: string;
+  meeting_start_time?: string;
+  meeting_agenda?: string;
+  client_names?: string[];
+  adviser_names?: string[];
   // Optimistic-concurrency marker. Passed back to sp_patch_extraction_fields
   // as expected_version on each edit; bumped on every successful patch.
   version?: number;
@@ -128,6 +134,82 @@ export async function fetchAdvisors(): Promise<AdvisorOption[]> {
 export async function scheduleMeeting(payload: ScheduleMeetingPayload): Promise<{ meeting_id: string }> {
   const res = await meetingAxios.post<{ meeting_id: string }>("/api/meetings/schedule", payload);
   return res.data;
+}
+
+// ─── Lifecycle: cancel / reschedule / status / no-show / complete / state ────
+
+export interface CancelMeetingPayload {
+  reason?: string;
+  idempotency_key?: string;
+}
+
+export interface RescheduleMeetingPayload {
+  new_start_time: string;   // ISO-8601
+  new_end_time:   string;   // ISO-8601
+  new_google_meet_link?: string;
+  reason?: string;
+  idempotency_key?: string;
+}
+
+export interface MeetingLifecycleState {
+  meeting_id: string;
+  status: string;
+  derived_state:
+    | "scheduled" | "in_progress" | "completed"
+    | "transcribed" | "extracted" | "validated"
+    | "cancelled" | "no_show" | "unknown";
+  reschedule_count: number;
+  is_no_show: boolean;
+  follow_up_required: boolean;
+  has_transcript: boolean;
+  transcript_count: number;
+  has_extraction: boolean;
+  extraction_count: number;
+  latest_extraction_id: string | null;
+  latest_extraction_validated: boolean | null;
+  start_time: string;
+  end_time: string;
+  elapsed_minutes: number | null;
+}
+
+export async function cancelMeeting(meetingId: string, payload: CancelMeetingPayload = {}): Promise<any> {
+  const res = await meetingAxios.post(`/api/meetings/${meetingId}/cancel`, payload);
+  return res.data;
+}
+
+export async function rescheduleMeeting(meetingId: string, payload: RescheduleMeetingPayload): Promise<any> {
+  const res = await meetingAxios.post(`/api/meetings/${meetingId}/reschedule`, payload);
+  return res.data;
+}
+
+export async function markMeetingNoShow(meetingId: string, reason?: string): Promise<any> {
+  const res = await meetingAxios.post(`/api/meetings/${meetingId}/no-show`,
+    null, { params: reason ? { reason } : undefined });
+  return res.data;
+}
+
+export async function completeMeeting(meetingId: string): Promise<any> {
+  const res = await meetingAxios.post(`/api/meetings/${meetingId}/complete`);
+  return res.data;
+}
+
+export async function getMeetingLifecycleState(meetingId: string): Promise<MeetingLifecycleState> {
+  const res = await meetingAxios.get<MeetingLifecycleState>(`/api/meetings/${meetingId}/lifecycle`);
+  return res.data;
+}
+
+// UUIDv4 — used as the idempotency_key on schedule / reschedule / cancel.
+// Browser-native crypto API. No external dep.
+export function newIdempotencyKey(): string {
+  if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+    return (crypto as any).randomUUID();
+  }
+  // Fallback for very old browsers: RFC4122-ish.
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === "x" ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
 }
 
 export async function fetchExtractions(validated?: boolean): Promise<Extraction[]> {
