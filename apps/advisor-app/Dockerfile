@@ -33,8 +33,12 @@ FROM nginx:alpine AS runner
 
 COPY --from=builder /repo/apps/advisor-app/dist /usr/share/nginx/html
 
-# SPA fallback: all routes serve index.html
-RUN printf 'server {\n  listen 3001;\n  root /usr/share/nginx/html;\n  index index.html;\n  location / { try_files $uri $uri/ /index.html; }\n}\n' \
+# SPA serving. Works in BOTH modes:
+#   - Behind Caddy (prod):     /advisor/* is stripped before reaching us → /assets/...
+#                              served by `location /`
+#   - Direct hit (local dev):  /advisor/* reaches us as-is → `location /advisor/`
+#                              rewrites in-place to drop the prefix, then falls through
+RUN printf 'server {\n  listen 3001;\n  root /usr/share/nginx/html;\n  index index.html;\n\n  # Direct-hit path: strip the /advisor/ prefix in-place\n  location /advisor/ {\n    rewrite ^/advisor/(.*)$ /$1 break;\n    try_files $uri $uri/ /index.html;\n  }\n\n  # When proxied (prefix already stripped) OR for any non-prefixed asset request\n  location / {\n    try_files $uri $uri/ /index.html;\n  }\n}\n' \
     > /etc/nginx/conf.d/default.conf
 
 EXPOSE 3001

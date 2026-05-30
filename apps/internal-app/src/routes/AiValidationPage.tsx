@@ -8,6 +8,7 @@ import {
   validateExtraction,
   FIELD_ID_TO_ATTR_ID,
 } from "../api/meetingApi";
+import { showApiError } from "../utils/showApiError";
 
 // Reverse of FIELD_ID_TO_ATTR_ID — used to translate the UI's attribute id
 // (e.g. "clientName") back to the 174-field numeric id the patch SP expects.
@@ -63,40 +64,66 @@ export default function AiValidationPage() {
   useEffect(() => {
     fetchExtractions()
       .then((extractions) => {
-        const first = extractions[0];
-        if (!first) {
+        // Only show meetings that still need validation.
+        const pending = (extractions || []).filter((e: any) => !e.validated);
+        if (pending.length === 0) {
           setClientProfiles([]);
           return;
         }
-        const liveProfile = {
-          id: first.client_id,
-          name: `Client ${first.client_id}`,
-          segment: "Live",
-          location: "—",
-          advisor: "—",
-          meetings: extractions.map((e) => ({
+
+        // Group extractions by client. Prefer `client_names[0]`; fall back to client_id.
+        const byClient = new Map<string, any>();
+        for (const e of pending) {
+          const clientName =
+            (Array.isArray(e.client_names) && e.client_names[0]) ||
+            `Client ${(e.client_id || "").slice(0, 6) || "—"}`;
+          const advisorName =
+            (Array.isArray(e.adviser_names) && e.adviser_names[0]) || "—";
+          const key = e.client_id || clientName;
+
+          if (!byClient.has(key)) {
+            byClient.set(key, {
+              id: key,
+              name: clientName,
+              segment: "Live",
+              location: "—",
+              advisor: advisorName,
+              meetings: [],
+            });
+          }
+          const profile = byClient.get(key);
+          const fieldValues = Object.values(e.raw_data || {}) as any[];
+          const avgConfidence = fieldValues.length
+            ? Math.round(
+                (fieldValues.reduce((sum, f) => sum + (f?.confidence ?? 0), 0) /
+                  fieldValues.length) * 100,
+              )
+            : 0;
+          profile.meetings.push({
             id: e.id,
-            name: `Meeting ${e.meeting_id.slice(-6)}`,
-            date: e.extracted_at.slice(0, 10),
-            confidence: Math.round(
-              Object.values(e.raw_data).reduce((sum, f) => sum + (f.confidence ?? 0), 0) /
-                Object.values(e.raw_data).length * 100,
-            ),
+            name: e.meeting_title || `Meeting ${e.meeting_id.slice(-6)}`,
+            date: (e.meeting_start_time || e.extracted_at || "").slice(0, 10),
+            confidence: avgConfidence,
             transcript: "",
             values: extractionToMeetingValues(e.raw_data),
-          })),
-        };
-        setClientProfiles([liveProfile]);
-        // Seed the per-extraction version map for optimistic concurrency.
-        // Each "meeting" in the UI maps to one extraction (meeting.id === extraction.id).
+          });
+        }
+
+        const profiles = Array.from(byClient.values());
+        // Most-recent meeting first inside each client.
+        for (const p of profiles) {
+          p.meetings.sort(
+            (a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime(),
+          );
+        }
+        setClientProfiles(profiles);
+
         const versions: Record<string, number> = {};
-        for (const e of extractions) {
-          versions[e.id] = e.version ?? 1;
-        }
+        for (const e of pending) versions[e.id] = e.version ?? 1;
         setExtractionVersions(versions);
-        if (liveProfile.meetings[0]) {
-          setSelectedMeetingId(liveProfile.meetings[0].id);
-        }
+
+        const firstMeeting = profiles[0]?.meetings?.[0];
+        if (firstMeeting) setSelectedMeetingId(firstMeeting.id);
       })
       .catch((err) => {
         setLoadError(err?.message || "Failed to load extractions");
@@ -267,9 +294,8 @@ export default function AiValidationPage() {
       ]);
       setExtractionVersions((v) => ({ ...v, [extractionId]: res.version }));
     } catch (e: any) {
-      // On version mismatch the server returns 409 with current_version.
-      // For now, surface to console; a future refinement is a toast + auto-reload.
       console.error("persist field edit failed", { attributeId, fieldId, error: e?.message });
+      showApiError(e, "Failed to save field. Reload to get the latest version.");
     }
   }
 
@@ -311,6 +337,7 @@ export default function AiValidationPage() {
       await validateExtraction(selectedMeeting.id, notes);
     } catch (e: any) {
       console.error("validate extraction failed", e?.message);
+      showApiError(e, "Failed to validate extraction.");
     }
   }
   // Suppress unused-warning until the view wires it.

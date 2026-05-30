@@ -8,14 +8,20 @@ from auth_dep import get_current_team_user
 from config import settings
 from db.meeting_procs import (
     proc_cancel_meeting,
+    proc_complete_meeting,
+    proc_get_external_event_id,
     proc_list_meetings,
+    proc_mark_no_show,
+    proc_meeting_lifecycle_state,
+    proc_reschedule_meeting,
     proc_save_meeting_external_sync,
     proc_schedule_meeting,
     proc_update_meeting_firefly_id,
+    proc_update_meeting_status_v2,
 )
 from eventbus import publish_event
 from firefly_client import FireflyClient
-from google_calendar_client import create_meet_event
+from google_calendar_client import create_meet_event, delete_meet_event, patch_meet_event
 from logger import get_logger
 from metrics import meetings_scheduled_total
 
@@ -176,12 +182,8 @@ async def schedule_meeting(
                 "error": str(exc),
             })
 
-    # Fireflies bot is invited via calendar attendee (firefly_bot_email) — no API call needed.
-    await proc_update_meeting_firefly_id(
-        meeting_id=meeting_id,
-        firefly_meeting_id=f"pending-{meeting_id}",
-        firefly_meeting_url=meet_url,
-    )
+    # Fireflies bot is invited via calendar attendee (firefly_bot_email).
+    # The real Fireflies meeting_id arrives later via webhook → meeting_transcripts.
 
     await publish_event("meeting.scheduled", {
         "meeting_id": meeting_id,
@@ -232,23 +234,229 @@ async def get_transcript_by_firefly_id(firefly_meeting_id: str):
     }
 
 
-@router.delete("/{meeting_id}", status_code=status.HTTP_200_OK)
-async def cancel_meeting(meeting_id: str, cancelled_by: str = "system", reason: str = ""):
+class CancelMeetingRequest(BaseModel):
+    reason: str | None = None
+    idempotency_key: str | None = None
+
+
+@router.post("/{meeting_id}/cancel", status_code=status.HTTP_200_OK)
+async def cancel_meeting(
+    meeting_id: str,
+    req: CancelMeetingRequest = CancelMeetingRequest(),
+    team_user_id: UUID = Depends(get_current_team_user),
+):
+    """
+    Cancel a meeting. `cancelled_by` is JWT-derived (Depends(get_current_team_user))
+    — never taken from the request body or query string. Idempotent on
+    `idempotency_key` if supplied.
+    """
     try:
-        await proc_cancel_meeting(
+        result = await proc_cancel_meeting(
             meeting_id=meeting_id,
-            cancelled_by=cancelled_by,
-            cancellation_reason=reason,
+            actor_id=str(team_user_id),
+            reason=req.reason,
+            idempotency_key=req.idempotency_key,
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
 
+    # Delete the Google Calendar event so attendees get a cancellation email.
+    # DB cancel already succeeded; calendar failure is non-fatal.
+    try:
+        event_id = await proc_get_external_event_id(meeting_id)
+        if event_id:
+            await delete_meet_event(
+                settings,
+                event_id=event_id,
+                calendar_id=settings.google_calendar_id or "primary",
+            )
+        else:
+            logger.warning("cancel_no_external_event_id", extra={"meeting_id": meeting_id})
+    except Exception as exc:
+        logger.exception("google_calendar_delete_failed", extra={
+            "meeting_id": meeting_id, "error": str(exc),
+        })
+
     await publish_event("meeting.cancelled", {
-        "meeting_id": meeting_id,
-        "cancelled_by": cancelled_by,
-        "reason": reason,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "meeting_id":    meeting_id,
+        "cancelled_by":  str(team_user_id),
+        "reason":        req.reason,
+        "timestamp":     datetime.now(timezone.utc).isoformat(),
     })
 
-    logger.info("meeting_cancelled", extra={"meeting_id": meeting_id})
-    return {"meeting_id": meeting_id, "status": "cancelled"}
+    logger.info("meeting_cancelled", extra={
+        "meeting_id":    meeting_id,
+        "cancelled_by":  str(team_user_id),
+        "was_replay":    bool((result or {}).get("was_replay")),
+    })
+    return result or {"meeting_id": meeting_id, "status": "cancelled"}
+
+
+# Legacy DELETE alias — same behaviour, kept so existing frontends keep working.
+# Deprecated: switch callers to POST /{meeting_id}/cancel.
+@router.delete("/{meeting_id}", status_code=status.HTTP_200_OK)
+async def cancel_meeting_legacy(
+    meeting_id: str,
+    team_user_id: UUID = Depends(get_current_team_user),
+    reason: str = "",
+):
+    return await cancel_meeting(
+        meeting_id=meeting_id,
+        req=CancelMeetingRequest(reason=reason or None, idempotency_key=None),
+        team_user_id=team_user_id,
+    )
+
+
+# ── Reschedule ────────────────────────────────────────────────────────────────
+
+class RescheduleMeetingRequest(BaseModel):
+    new_start_time: str                     # ISO-8601; SP normalises to datetime
+    new_end_time:   str
+    new_google_meet_link: str | None = None
+    reason: str | None = None
+    idempotency_key: str | None = None
+
+
+@router.post("/{meeting_id}/reschedule", status_code=status.HTTP_200_OK)
+async def reschedule_meeting(
+    meeting_id: str,
+    req: RescheduleMeetingRequest,
+    team_user_id: UUID = Depends(get_current_team_user),
+):
+    """
+    In-place reschedule. Meeting id stays the same — existing transcripts /
+    extractions / attendees keep their references. Rejects when a transcript
+    already exists (unless application_config flag overrides).
+
+    Caller is responsible for patching the Google Calendar event afterwards
+    if `new_google_meet_link` was issued; this SP does not call any external
+    provider.
+    """
+    try:
+        result = await proc_reschedule_meeting(
+            meeting_id=meeting_id,
+            new_start_time=req.new_start_time,
+            new_end_time=req.new_end_time,
+            new_google_meet_link=req.new_google_meet_link,
+            actor_id=str(team_user_id),
+            reason=req.reason,
+            idempotency_key=req.idempotency_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    # Patch the Google Calendar event so attendees get an updated invite email.
+    # DB reschedule already succeeded; calendar patch failure is non-fatal.
+    try:
+        event_id = await proc_get_external_event_id(meeting_id)
+        if event_id:
+            await patch_meet_event(
+                settings,
+                event_id=event_id,
+                new_start=req.new_start_time,
+                new_end=req.new_end_time,
+                timezone=settings.google_calendar_timezone or "Asia/Kolkata",
+                calendar_id=settings.google_calendar_id or "primary",
+            )
+        else:
+            logger.warning("reschedule_no_external_event_id", extra={"meeting_id": meeting_id})
+    except Exception as exc:
+        logger.exception("google_calendar_patch_failed", extra={
+            "meeting_id": meeting_id, "error": str(exc),
+        })
+
+    await publish_event("meeting.rescheduled", {
+        "meeting_id":    meeting_id,
+        "rescheduled_by": str(team_user_id),
+        "new_start":     req.new_start_time,
+        "new_end":       req.new_end_time,
+        "reason":        req.reason,
+        "timestamp":     datetime.now(timezone.utc).isoformat(),
+    })
+
+    logger.info("meeting_rescheduled", extra={
+        "meeting_id":       meeting_id,
+        "rescheduled_by":   str(team_user_id),
+        "reschedule_count": (result or {}).get("reschedule_count"),
+        "was_replay":       bool((result or {}).get("was_replay")),
+    })
+    return result
+
+
+# ── Generic status transition (escape hatch for ops UI) ───────────────────────
+
+class UpdateMeetingStatusRequest(BaseModel):
+    new_status: str                         # in_progress | completed | cancelled | no_show
+    reason: str | None = None
+
+
+@router.post("/{meeting_id}/status", status_code=status.HTTP_200_OK)
+async def update_meeting_status(
+    meeting_id: str,
+    req: UpdateMeetingStatusRequest,
+    team_user_id: UUID = Depends(get_current_team_user),
+):
+    """Generic status transition gate. For cancel use POST /cancel."""
+    try:
+        result = await proc_update_meeting_status_v2(
+            meeting_id=meeting_id,
+            new_status=req.new_status,
+            actor_id=str(team_user_id),
+            reason=req.reason,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    logger.info("meeting_status_changed", extra={
+        "meeting_id": meeting_id,
+        "new_status": req.new_status,
+        "actor":      str(team_user_id),
+        "was_change": (result or {}).get("was_change"),
+    })
+    return result
+
+
+# ── No-show + complete (operator + cron-driven) ───────────────────────────────
+
+@router.post("/{meeting_id}/no-show", status_code=status.HTTP_200_OK)
+async def mark_no_show(
+    meeting_id: str,
+    team_user_id: UUID = Depends(get_current_team_user),
+    reason: str = "",
+):
+    try:
+        return await proc_mark_no_show(
+            meeting_id=meeting_id,
+            actor_id=str(team_user_id),
+            reason=reason or None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+@router.post("/{meeting_id}/complete", status_code=status.HTTP_200_OK)
+async def complete_meeting(
+    meeting_id: str,
+    team_user_id: UUID = Depends(get_current_team_user),
+):
+    try:
+        return await proc_complete_meeting(
+            meeting_id=meeting_id,
+            actor_id=str(team_user_id),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+
+# ── Lifecycle state (read-only — for the UI badge) ────────────────────────────
+
+@router.get("/{meeting_id}/lifecycle")
+async def get_meeting_lifecycle_state(meeting_id: str):
+    """
+    Returns the derived lifecycle bucket plus the underlying flags. Used by the
+    AI Validation / Scheduling pages to render a single "where is this meeting?"
+    badge without joining transcripts/extractions client-side.
+    """
+    row = await proc_meeting_lifecycle_state(meeting_id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Meeting not found.")
+    return row

@@ -40,7 +40,7 @@ FROM nginx:alpine AS runner
 
 COPY --from=builder /repo/apps/internal-app/dist /usr/share/nginx/html
 
-# SPA fallback: all routes serve index.html
+# SPA fallback: all routes serve index.html (no path prefix; the app is mounted at /)
 RUN printf 'server {\n  listen 3002;\n  root /usr/share/nginx/html;\n  index index.html;\n  location / { try_files $uri $uri/ /index.html; }\n}\n' \
     > /etc/nginx/conf.d/default.conf
 

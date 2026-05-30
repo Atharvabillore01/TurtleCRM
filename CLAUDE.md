@@ -80,8 +80,11 @@ All `depends_on` use `condition: service_healthy` in docker-compose.
 2. `POST /auth/advisor/verify-otp` → validates OTP + session → publishes `auth.otp.verified` + `auth.login.success` → issues JWT pair
 3. Google OAuth: `GET /auth/oauth/google` → consent screen → `/auth/oauth/google/callback` → publishes `auth.login.success` → issue JWT
 
-**internal-app** — Google OAuth only:
-1. `GET /auth/oauth/google` → consent screen → `/auth/oauth/google/callback` → issue JWT (no OTP step)
+**internal-app** — Google OAuth only, **membership-gated**:
+1. `GET /auth/oauth/internal/google` → Google consent screen
+2. `GET /auth/oauth/internal/google/callback` → admission check `SELECT EXISTS(... FROM team_users WHERE lower(email)=$1 AND is_active=TRUE)`. **Reject** if no active row. Otherwise `sp_create_team_user_via_oauth` binds the Google identity to the existing row and returns the canonical `team_users.id` → JWT issued.
+
+Onboarding a new internal user = `INSERT INTO team_users (...)` first, then the user logs in. There is no auto-provisioning — strangers who hit the OAuth endpoint receive `/auth/error?reason=not_authorised`.
 
 ### Token lifecycle
 

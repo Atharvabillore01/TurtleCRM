@@ -1319,10 +1319,30 @@ async def proc_save_action_item(**kwargs) -> str:
     return res.result
 
 
-async def proc_cancel_meeting(**kwargs):
-    res = await call_proc("sp_cancel_meeting", **kwargs)
-    if not res.ok:
-        raise ValueError(res.errormessage) if res.errornumber in (2004, 2005) else RuntimeError(res.errormessage)
+async def proc_cancel_meeting(
+    *,
+    meeting_id: str,
+    actor_id: str | None = None,
+    reason: str | None = None,
+    idempotency_key: str | None = None,
+    # Legacy kwarg names — accept then ignore so old callers don't break.
+    cancelled_by: str | None = None,            # legacy → actor_id
+    cancellation_reason: str | None = None,     # legacy → reason
+):
+    """
+    Cancel a meeting via the deployed sp_cancel_meeting SP.
+
+    LEGACY COMPAT:
+      The old in-memory stub used kwargs `cancelled_by` + `cancellation_reason`.
+      Those are accepted here and forwarded to the SP's `actor_id` / `reason`
+      so route handlers can migrate at their own pace.
+    """
+    return await proc_cancel_meeting_v2(
+        meeting_id=meeting_id,
+        actor_id=actor_id or cancelled_by,
+        reason=reason or cancellation_reason,
+        idempotency_key=idempotency_key,
+    )
 
 
 async def proc_get_extraction(extraction_id: str) -> dict:
@@ -1408,6 +1428,8 @@ async def proc_schedule_meeting(
     agenda: str = "",
     google_meet_link: str | None = None,
     metadata: dict | None = None,
+    pre_meeting_notes: str | None = None,
+    idempotency_key: str | None = None,
     # Legacy compatibility shims — accept the old route's extra kwargs but ignore them.
     **legacy_kwargs,
 ) -> str:
@@ -1456,12 +1478,17 @@ async def proc_schedule_meeting(
         _normalise_uuid_list(adviser_user_ids),
         list(agents_to_use or []),
         metadata or {},
+        pre_meeting_notes,
+        idempotency_key,
     )
-    if not res.ok:
-        if res.errornumber in (1008, 1012, 1013):
-            raise ValueError(res.errormessage)
-        raise RuntimeError(res.errormessage)
-    return res.result["meeting_id"]
+    if res.ok:
+        return res.result["meeting_id"]
+    if res.errornumber == 1019:
+        # Idempotency replay — the SP returns the cached meeting_id.
+        return (res.result or {}).get("meeting_id")
+    if res.errornumber in (1008, 1012, 1013):
+        raise ValueError(res.errormessage)
+    raise RuntimeError(res.errormessage)
 
 
 async def proc_save_meeting_external_sync(
@@ -1702,5 +1729,201 @@ async def proc_validate_extraction(  # type: ignore[override]
 # means the merge always fires regardless of how the route invokes it.
 # The direct-call (call_function) variant that lived here was removed —
 # it bypassed the raw_data merge and would have broken the frontend.
+
+
+# ============================================================================
+# Meeting lifecycle wrappers  (deployed SPs in `meetings_new/` — 2026-05-28)
+# ----------------------------------------------------------------------------
+# These wrappers call the real Postgres SPs directly via call_function (not
+# via the registered-stub registry). They supersede the in-memory stubs
+# `_sp_cancel_meeting` and `_sp_update_meeting_status` defined earlier in
+# this file — those stubs remain only for backward-compat with any caller
+# that hasn't migrated; they should be considered deprecated.
+# ============================================================================
+
+async def proc_update_meeting_status_v2(
+    *,
+    meeting_id: str,
+    new_status: str,            # in_progress | completed | cancelled | no_show
+    actor_id: str | None = None,
+    reason: str | None = None,
+) -> dict:
+    """
+    Generic status-transition gate (deployed SP: sp_update_meeting_status).
+
+    Raises ValueError on invalid transitions (1008/1014/1018), RuntimeError
+    on infra errors. Returns the dict envelope with prior_status / new_status /
+    was_change.
+    """
+    res = await call_function(
+        "sp_update_meeting_status",
+        meeting_id, new_status, actor_id, reason,
+    )
+    if not res.ok:
+        if res.errornumber in (1008, 1014, 1018):
+            raise ValueError(res.errormessage)
+        raise RuntimeError(res.errormessage)
+    return res.result
+
+
+async def proc_complete_meeting(
+    *,
+    meeting_id: str,
+    actor_id: str | None = None,
+) -> dict:
+    """sp_complete_meeting — thin wrapper, idempotent on already-completed."""
+    res = await call_function("sp_complete_meeting", meeting_id, actor_id)
+    if not res.ok:
+        if res.errornumber in (1008, 1014, 1018):
+            raise ValueError(res.errormessage)
+        raise RuntimeError(res.errormessage)
+    return res.result
+
+
+async def proc_mark_no_show(
+    *,
+    meeting_id: str,
+    actor_id: str | None = None,
+    reason: str | None = None,
+) -> dict:
+    """
+    sp_mark_no_show — atomically flips meetings.status='no_show' AND
+    meeting_internal_details.is_no_show=TRUE. Idempotent.
+    """
+    res = await call_function(
+        "sp_mark_no_show",
+        meeting_id, actor_id, reason,
+    )
+    if not res.ok:
+        if res.errornumber in (1008, 1014, 1018):
+            raise ValueError(res.errormessage)
+        raise RuntimeError(res.errormessage)
+    return res.result
+
+
+async def proc_cancel_meeting_v2(
+    *,
+    meeting_id: str,
+    actor_id: str | None = None,
+    reason: str | None = None,
+    idempotency_key: str | None = None,
+) -> dict:
+    """
+    sp_cancel_meeting — sets status='cancelled', preserves history, optional
+    task cascade (config-gated). Idempotent via p_idempotency_key.
+
+    Errornumber 1019 (idempotency replay) is surfaced as a successful result
+    with was_replay=True — caller can treat it as success without retrying.
+    """
+    res = await call_function(
+        "sp_cancel_meeting",
+        meeting_id, actor_id, reason, idempotency_key,
+    )
+    if res.ok:
+        return res.result
+    if res.errornumber == 1019:
+        # Idempotency replay — cached response in res.result
+        return res.result or {"meeting_id": meeting_id, "was_replay": True}
+    if res.errornumber in (1008, 1014, 1018):
+        raise ValueError(res.errormessage)
+    raise RuntimeError(res.errormessage)
+
+
+async def proc_reschedule_meeting(
+    *,
+    meeting_id: str,
+    new_start_time,             # datetime or ISO string
+    new_end_time,               # datetime or ISO string
+    new_google_meet_link: str | None = None,
+    actor_id: str | None = None,
+    reason: str | None = None,
+    idempotency_key: str | None = None,
+) -> dict:
+    """
+    sp_reschedule_meeting — in-place update of start/end + optional Meet link;
+    bumps meeting_internal_details.reschedule_count. Status stays 'scheduled'.
+
+    Rejects when a meeting_transcripts row exists (errornumber 1017) unless
+    application_config('meeting.reschedule.blocked_when_transcript') is 'false'.
+
+    Caller should follow with proc_save_meeting_external_sync if a new
+    calendar event id was created (nextaction='patch_external_calendar').
+    """
+    # asyncpg's TIMESTAMPTZ codec rejects raw strings — normalise to datetime.
+    def _to_dt(v):
+        if v is None or isinstance(v, _dt):
+            return v
+        return _dt.fromisoformat(str(v).replace("Z", "+00:00"))
+
+    res = await call_function(
+        "sp_reschedule_meeting",
+        meeting_id,
+        _to_dt(new_start_time),
+        _to_dt(new_end_time),
+        new_google_meet_link,
+        actor_id,
+        reason,
+        idempotency_key,
+    )
+    if res.ok:
+        return res.result
+    if res.errornumber == 1019:
+        return res.result or {"meeting_id": meeting_id, "was_replay": True}
+    if res.errornumber in (1008, 1014, 1017, 1018):
+        raise ValueError(res.errormessage)
+    raise RuntimeError(res.errormessage)
+
+
+async def proc_get_external_event_id(meeting_id: str) -> str | None:
+    """Return the Google Calendar event_id stored on meeting_external_sync, or None."""
+    if not meeting_id:
+        return None
+    from db.pool import get_pool
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT external_meeting_id FROM meeting_external_sync "
+            "WHERE meeting_id = $1::uuid AND booking_provider = 'google_meet' "
+            "ORDER BY updated_at DESC LIMIT 1",
+            meeting_id,
+        )
+    if row is None:
+        return None
+    val = row["external_meeting_id"]
+    if not val or str(val).startswith("pending-"):
+        return None
+    return str(val)
+
+
+async def proc_meeting_lifecycle_state(meeting_id: str) -> dict | None:
+    """
+    fn_meeting_lifecycle_state — read-only derivation of the meeting's
+    current lifecycle bucket (scheduled | in_progress | completed |
+    transcribed | extracted | validated | cancelled | no_show).
+
+    Returns None when the meeting is not found (function returns zero rows
+    rather than erroring).
+    """
+    if not meeting_id:
+        return None
+
+    from db.pool import get_pool
+
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM fn_meeting_lifecycle_state($1::uuid)",
+            meeting_id,
+        )
+
+    if row is None:
+        return None
+
+    d = dict(row)
+    # Stringify UUIDs / timestamps for JSON-safe output.
+    for k, v in list(d.items()):
+        if isinstance(v, uuid.UUID):
+            d[k] = str(v)
+        elif isinstance(v, datetime):
+            d[k] = v.isoformat()
+    return d
 
 
