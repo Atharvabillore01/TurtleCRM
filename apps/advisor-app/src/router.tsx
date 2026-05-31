@@ -22,4 +22,8 @@ export const router = createBrowserRouter([
       },
     ],
   },
-], { basename: "/advisor" });
+], {
+  // Vite injects BASE_URL from vite.config.ts `base`. Trim trailing slash
+  // because createBrowserRouter expects "/advisor", not "/advisor/".
+  basename: (import.meta.env.BASE_URL || "/").replace(/\/$/, "") || "/",
+});
