@@ -1874,6 +1874,77 @@ async def proc_reschedule_meeting(
     raise RuntimeError(res.errormessage)
 
 
+async def proc_ingest_meeting_from_fireflies(
+    *,
+    fireflies_meeting_id: str,
+    meeting_url: str | None,
+    title: str,
+    start_time,
+    duration_minutes: int,
+    advisor_email: str,
+    client_email: str,
+    client_display_name: str | None,
+    transcript_text: str,
+    actor_email: str,
+    idempotency_key: str | None = None,
+) -> dict:
+    """
+    Wraps sp_ingest_meeting_from_fireflies. Translates errornumber 1020/1021
+    into ValueError so the route can return a clean 422.
+
+    Returns the SP's result dict. On replay (natural key already ingested OR
+    client-side idempotency hit), the dict carries was_replay=True.
+    """
+    # Fireflies' GraphQL `date` field returns a Unix epoch in milliseconds
+    # (float/int), e.g. 1748534400000. The webhook payload uses ISO strings.
+    # Accept both: numbers → fromtimestamp; strings → fromisoformat.
+    try:
+        if isinstance(start_time, _dt):
+            start_dt = start_time
+        elif isinstance(start_time, (int, float)):
+            # Detect seconds vs milliseconds — anything past year 9999 in seconds
+            # (> ~253402300799) is millis. Use 1e12 as a safe threshold.
+            ts = float(start_time)
+            if ts > 1e12:
+                ts = ts / 1000.0
+            start_dt = _dt.fromtimestamp(ts, tz=timezone_utc)
+        else:
+            s = str(start_time).strip()
+            # Numeric string?
+            try:
+                ts = float(s)
+                if ts > 1e12:
+                    ts = ts / 1000.0
+                start_dt = _dt.fromtimestamp(ts, tz=timezone_utc)
+            except ValueError:
+                start_dt = _dt.fromisoformat(s.replace("Z", "+00:00"))
+    except Exception as exc:
+        raise ValueError(f"could not parse start_time {start_time!r}: {exc}")
+
+    res = await call_function(
+        "sp_ingest_meeting_from_fireflies",
+        fireflies_meeting_id,
+        meeting_url,
+        title,
+        start_dt,
+        int(duration_minutes),
+        advisor_email,
+        client_email,
+        client_display_name,
+        transcript_text,
+        actor_email,
+        idempotency_key,
+    )
+    if res.ok:
+        return res.result
+    # 1022 is the natural-key replay path — return the cached result, not an error.
+    if res.errornumber == 1022:
+        return res.result or {"was_replay": True}
+    if res.errornumber in (1008, 1020, 1021):
+        raise ValueError(res.errormessage)
+    raise RuntimeError(res.errormessage)
+
+
 async def proc_get_external_event_id(meeting_id: str) -> str | None:
     """Return the Google Calendar event_id stored on meeting_external_sync, or None."""
     if not meeting_id:

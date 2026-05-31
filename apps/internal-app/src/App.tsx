@@ -11,6 +11,7 @@ import AiValidationPage      from "./routes/AiValidationPage";
 import ClientsPage           from "./routes/ClientsPage";
 import LeadJourneyPage       from "./routes/LeadJourneyPage";
 import SchedulingPage        from "./routes/SchedulingPage";
+import IngestMeetingPage     from "./routes/IngestMeetingPage";
 import MeetingsPage          from "./routes/MeetingsPage";
 import ClientJourneyPage     from "./routes/ClientJourneyPage";
 import EmailTrackerPage      from "./routes/EmailTrackerPage";
@@ -42,6 +43,7 @@ export default function App() {
             <Route path="lead-journey"      element={<LeadJourneyPage />} />
             <Route path="ai-validation"     element={<AiValidationPage />} />
             <Route path="scheduling"        element={<SchedulingPage />} />
+            <Route path="ingest"            element={<IngestMeetingPage />} />
             <Route path="tasks"             element={<TasksPage />} />
             <Route path="meetings"          element={<MeetingsPage />} />
             <Route path="client-journey"    element={<ClientJourneyPage />} />

@@ -198,6 +198,61 @@ export async function getMeetingLifecycleState(meetingId: string): Promise<Meeti
   return res.data;
 }
 
+// ─── Manual Fireflies ingest ────────────────────────────────────────────────
+
+export interface IngestPreview {
+  fireflies_meeting_id: string;
+  title: string;
+  date: string | null;
+  duration_minutes: number;
+  meeting_link: string;
+  transcript_ready: boolean;
+  transcript_length: number;
+  non_bot_attendees: Array<{ email: string; displayName: string }>;
+  advisor_match: {
+    adviser_user_id: string;
+    advisor_id: string;
+    email: string;
+    full_name: string;
+  } | null;
+  client: { email: string; displayName: string } | null;
+  existing_client: { id: string; email: string; name: string } | null;
+  already_ingested_meeting_id: string | null;
+  extraction_exists: boolean;
+  would_skip_reason: string | null;
+}
+
+export interface IngestResult {
+  meeting_id: string;
+  advisor_id: string;
+  adviser_user_id: string;
+  client_id: string;
+  client_user_id: string;
+  advisor_name: string;
+  client_name: string;
+  was_new_client: boolean;
+  was_replay: boolean;
+}
+
+export async function previewIngest(fireflies_url: string): Promise<IngestPreview> {
+  const res = await meetingAxios.post<IngestPreview>(
+    "/api/meetings/ingest/preview",
+    { fireflies_url },
+  );
+  return res.data;
+}
+
+export async function ingestMeeting(
+  fireflies_url: string,
+  idempotency_key: string,
+): Promise<IngestResult> {
+  const res = await meetingAxios.post<IngestResult>(
+    "/api/meetings/ingest",
+    { fireflies_url, idempotency_key },
+  );
+  return res.data;
+}
+
 // UUIDv4 — used as the idempotency_key on schedule / reschedule / cancel.
 // Browser-native crypto API. No external dep.
 export function newIdempotencyKey(): string {
@@ -210,6 +265,12 @@ export function newIdempotencyKey(): string {
     const v = c === "x" ? r : (r & 0x3) | 0x8;
     return v.toString(16);
   });
+}
+
+/** Return the extraction for a specific meeting, or null if not yet processed. */
+export async function fetchExtractionForMeeting(meetingId: string): Promise<Extraction | null> {
+  const all = await fetchExtractions();
+  return all.find((e) => e.meeting_id === meetingId) ?? null;
 }
 
 export async function fetchExtractions(validated?: boolean): Promise<Extraction[]> {
