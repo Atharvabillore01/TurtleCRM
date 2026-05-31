@@ -6,6 +6,7 @@ row lookup), POSTs to the AI extraction agent at CRM_AI_SERVICE_URL/extract,
 saves the extraction, and emits the downstream events.
 """
 
+import asyncio
 import time
 import uuid
 from datetime import datetime, timezone
@@ -45,25 +46,55 @@ async def _handle_transcribed(payload: dict) -> None:
 
     start = time.perf_counter()
 
-    try:
-        async with httpx.AsyncClient(timeout=180.0) as client:
-            resp = await client.post(
-                settings.crm_ai_service_url + "/extract",
-                json={
-                    "transcript": transcript_text,
-                    "meeting_id": meeting_id,
-                    "context": {
-                        "client_id":     client_id,
-                        "agenda":        agenda,
-                        "agents_to_use": agents_to_use,
-                    },
-                },
-            )
-            resp.raise_for_status()
-            extraction_data: dict = resp.json()
-    except httpx.HTTPError as exc:
+    # Retry the CRM-AI extraction up to 4 attempts. 504/timeout/5xx are
+    # transient (LLM cold-starts, nginx proxy timeouts upstream of the
+    # agent); 4xx is a real client error and short-circuits.
+    payload = {
+        "transcript": transcript_text,
+        "meeting_id": meeting_id,
+        "context": {
+            "client_id":     client_id,
+            "agenda":        agenda,
+            "agents_to_use": agents_to_use,
+        },
+    }
+    extract_url = settings.crm_ai_service_url + "/extract"
+    extraction_data: dict | None = None
+    last_error: str | None = None
+
+    for attempt in range(1, 5):
+        try:
+            async with httpx.AsyncClient(timeout=600.0) as client:
+                resp = await client.post(extract_url, json=payload)
+                # 4xx → don't retry, the request shape is wrong
+                if 400 <= resp.status_code < 500:
+                    logger.error("ai_extraction_client_error", extra={
+                        "status": resp.status_code,
+                        "body":   resp.text[:500],
+                        "meeting_id": meeting_id,
+                    })
+                    return
+                resp.raise_for_status()
+                extraction_data = resp.json()
+                break
+        except (httpx.HTTPError, httpx.TimeoutException) as exc:
+            last_error = str(exc)
+            backoff = (2 ** (attempt - 1)) * 10   # 10s, 20s, 40s, 80s
+            logger.warning("ai_extraction_retry", extra={
+                "attempt":    attempt,
+                "of":         4,
+                "error":      last_error,
+                "next_in_s":  backoff if attempt < 4 else None,
+                "meeting_id": meeting_id,
+            })
+            if attempt < 4:
+                await asyncio.sleep(backoff)
+
+    if extraction_data is None:
         logger.error("ai_extraction_failed", extra={
-            "error": str(exc), "meeting_id": meeting_id,
+            "error":     last_error,
+            "attempts":  4,
+            "meeting_id": meeting_id,
         })
         return
 

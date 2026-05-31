@@ -35,6 +35,7 @@ const navItems = [
   { label: "Lead Journey",           path: "/dashboard/lead-journey",          icon: UserAccountIcon },
   { label: "AI Validation",          path: "/dashboard/ai-validation",         icon: AiBrain01Icon },
   { label: "Scheduling",             path: "/dashboard/scheduling",            icon: Calendar01Icon },
+  { label: "Ingest meeting",         path: "/dashboard/ingest",                icon: Calendar01Icon },
   { label: "Tasks",                  path: "/dashboard/tasks",                 icon: Task01Icon },
   { label: "Meetings",               path: "/dashboard/meetings",              icon: Briefcase01Icon },
   { label: "Client Journey",         path: "/dashboard/client-journey",        icon: Analytics01Icon },
