@@ -79,4 +79,25 @@ async def _handle_save(payload: dict) -> None:
 
 
 async def run_data_persistence() -> None:
-    await start_consumer("extraction.save", "meeting-service-persistence", _handle_save)
+    """Supervises the extraction.save consumer. Same retry-with-backoff
+    pattern as transcript_processor — protects against cold-start races
+    against RabbitMQ and against silent task death on transient errors."""
+    import asyncio as _asyncio
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            await start_consumer(
+                "extraction.save",
+                "meeting-service-persistence",
+                _handle_save,
+            )
+            logger.warning("data_persistence_consumer_returned", extra={"attempt": attempt})
+        except Exception as exc:
+            backoff = min(30, 2 ** min(attempt, 5))
+            logger.exception("data_persistence_consumer_failed", extra={
+                "attempt": attempt,
+                "next_retry_s": backoff,
+                "error": str(exc),
+            })
+            await _asyncio.sleep(backoff)

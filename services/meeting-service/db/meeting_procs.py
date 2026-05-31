@@ -686,18 +686,17 @@ async def _sp_cancel_meeting(
 
 async def _fn_get_extraction(extraction_id: str) -> ProcResult:
     """
-    Real DB call to deployed `fn_get_extraction` (Wave D).
+    Real DB call to deployed `fn_get_extraction` (migration 022+).
 
-    AI Validation page DETAIL view. Returns one extraction with full
-    `raw_data` (174-field JSONB) PLUS `recent_edits` — the last 50
-    rows from extraction_field_audit, each enriched with the reviewer's
-    `team_users.name`. Reviewer can see what's been changed and by whom
-    before approving.
+    AI Validation page DETAIL view. Returns one extraction with the
+    normalized `fields` JSONB array (one entry per field, enriched
+    with touch_point + attribute from field_definitions) PLUS
+    `recent_edits` (last 50 audit rows).
 
-    LEGACY SHAPE PRESERVED:
-      Returns a dict (not the legacy ExtractionRow dataclass). The route
-      handler at routes/extractions.py:30 already handles both via
-      `r if isinstance(r, dict) else asdict(r)`.
+    For backward compatibility with the existing UI that expects a
+    `raw_data` dict keyed by field_id string, we ALSO project the
+    fields array into a `raw_data` dict here. New UI code should
+    prefer `fields` (preserves ordering + display_order).
     """
     from db.pool import get_pool
 
@@ -728,14 +727,46 @@ async def _fn_get_extraction(extraction_id: str) -> ProcResult:
         elif hasattr(v, "as_tuple"):
             d[k] = float(v)
 
-    # raw_data + recent_edits may come back as JSONB strings; parse defensively.
-    for jsonb_key in ("raw_data", "recent_edits"):
+    # JSONB columns may arrive as Python strings via asyncpg — parse them.
+    for jsonb_key in ("fields", "recent_edits"):
         v = d.get(jsonb_key)
         if isinstance(v, str):
             try:
-                d[jsonb_key] = _json.loads(v) if v else ({} if jsonb_key == "raw_data" else [])
+                d[jsonb_key] = _json.loads(v) if v else []
             except ValueError:
-                d[jsonb_key] = {} if jsonb_key == "raw_data" else []
+                d[jsonb_key] = []
+        elif v is None:
+            d[jsonb_key] = []
+
+    # total_fields can be BIGINT — coerce to int for clean JSON.
+    if d.get("total_fields") is not None:
+        try:
+            d["total_fields"] = int(d["total_fields"])
+        except (TypeError, ValueError):
+            d["total_fields"] = 0
+
+    # Backward-compat: project the fields[] array into a raw_data dict
+    # keyed by field_id string ("1", "2", …). The pre-022 UI consumes
+    # this shape directly. Each entry mirrors the legacy RawField shape:
+    #   { value, confidence, confidence_level, source, agent,
+    #     attribute, touch_point }
+    raw_data: dict[str, dict] = {}
+    for entry in d.get("fields") or []:
+        if not isinstance(entry, dict):
+            continue
+        fid = entry.get("field_id")
+        if fid is None:
+            continue
+        raw_data[str(fid)] = {
+            "value":            entry.get("value"),
+            "confidence":       entry.get("confidence"),
+            "confidence_level": entry.get("confidence_level"),
+            "source":           entry.get("source"),
+            "agent":            entry.get("agent"),
+            "attribute":        entry.get("attribute"),
+            "touch_point":      entry.get("touch_point"),
+        }
+    d["raw_data"] = raw_data
 
     return ProcResult(result=d)
 
@@ -976,17 +1007,16 @@ async def _fn_list_extractions(
     offset: int = 0,
 ) -> ProcResult:
     """
-    Real DB call to deployed `fn_list_extractions` (Wave D).
+    Real DB call to deployed `fn_list_extractions` (migration 022+).
 
-    The SP intentionally omits `raw_data` (10–100KB JSONB) from its return
-    shape for list-page perf. BUT the AI Validation page's React component
-    (AiValidationPage.tsx) reads `e.raw_data` from list rows to compute the
-    average-confidence preview. To keep the frontend working without a
-    refactor we do a SINGLE follow-up query that pulls raw_data for all
-    returned ids in one round-trip and merges it into each row.
+    The SP intentionally omits the per-field payload from the list view —
+    only meeting context, totals, and validation state are returned. To get
+    the actual extracted values for a given extraction, call
+    `fn_get_extraction(extraction_id)` (returns `fields` JSONB array).
 
-    Two queries, not N+1. Drop the follow-up query later when the AI
-    Validation page moves to per-row detail fetches via fn_get_extraction.
+    `total_fields` is now BIGINT (computed live via COUNT on
+    extraction_fields — the old `extractions.total_fields` column was
+    removed in migration 022).
 
     Args mirror the SP signature; the route handler currently passes only
     `validated`, the rest accept their defaults.
@@ -997,36 +1027,12 @@ async def _fn_list_extractions(
     cid = _to_uuid(client_id)  if client_id  else None
 
     async with get_pool().acquire() as conn:
-        # 1. List with meeting context (no raw_data)
         rows = await conn.fetch(
             "SELECT * FROM fn_list_extractions("
             " $1::boolean, $2::uuid, $3::uuid, $4::int, $5::int)",
             validated, mid, cid, limit, offset,
         )
 
-        if not rows:
-            return ProcResult(result=[])
-
-        # 2. One-shot raw_data fetch for all returned ids
-        extraction_ids = [r["id"] for r in rows]
-        raw_rows = await conn.fetch(
-            "SELECT id, raw_data FROM extractions WHERE id = ANY($1::uuid[])",
-            extraction_ids,
-        )
-
-    # ---- Build a {id → raw_data dict} map ----
-    import json as _json
-    raw_by_id: dict[str, dict] = {}
-    for rr in raw_rows:
-        raw = rr["raw_data"]
-        if isinstance(raw, str):
-            try:
-                raw = _json.loads(raw) if raw else {}
-            except ValueError:
-                raw = {}
-        raw_by_id[str(rr["id"])] = raw if isinstance(raw, dict) else {}
-
-    # ---- Normalise rows + attach raw_data ----
     result: list[dict] = []
     for r in rows:
         d = dict(r)
@@ -1042,7 +1048,12 @@ async def _fn_list_extractions(
                 d[k] = v.isoformat()
             elif hasattr(v, "as_tuple"):
                 d[k] = float(v)
-        d["raw_data"] = raw_by_id.get(d["id"], {})
+        # total_fields can come back as int (BIGINT) — make sure it's an int, not Decimal.
+        if d.get("total_fields") is not None:
+            try:
+                d["total_fields"] = int(d["total_fields"])
+            except (TypeError, ValueError):
+                d["total_fields"] = 0
         result.append(d)
 
     return ProcResult(result=result)
@@ -1612,10 +1623,15 @@ async def proc_save_extraction(
         except ValueError as exc:
             raise ValueError(f"could not parse extracted_at: {exc}")
 
+    # Migration 022 removed extractions.total_fields — it's now derived
+    # from a COUNT on extraction_fields. v2 SP takes 8 params (no
+    # total_fields). The legacy `total_fields` kwarg is accepted for
+    # caller backward-compat but intentionally NOT passed to the SP.
+    _ = total_fields   # silence the unused-warning; kept for back-compat
     res = await call_function(
         "sp_save_extraction",
         meeting_id, extraction_job_id, provider, model, raw_data_json,
-        transcript_id, extracted_at_dt, duration_seconds, total_fields,
+        transcript_id, extracted_at_dt, duration_seconds,
     )
     if not res.ok:
         if res.errornumber in (1008, 1014):
@@ -1688,6 +1704,11 @@ async def proc_patch_extraction_fields(
                 f"version mismatch (current={current_version}, "
                 f"expected={expected_version}) — reload and retry"
             )
+        if res.errornumber == 1018:
+            # Extraction already validated — edits blocked. Raise a typed
+            # exception so the route can return HTTP 423 (Locked) and the
+            # UI can prompt the reviewer to unvalidate first.
+            raise PermissionError(res.errormessage)
         if res.errornumber in (1008, 1012, 1014):
             raise ValueError(res.errormessage)
         raise RuntimeError(res.errormessage)
@@ -1698,12 +1719,24 @@ async def proc_validate_extraction(  # type: ignore[override]
     *,
     extraction_id: str,
     validated_by: str,
+    reason: str,
+    notes: str | None = None,
+    # Legacy callers passed `validation_notes` as the only string. Accept it
+    # as a fallback for backward compat — but new code should pass `reason`.
     validation_notes: str | None = None,
     **legacy_kwargs,
 ) -> dict:
+    """
+    Phase 2 v2 — sp_validate_extraction now REQUIRES p_reason (≥5 chars).
+    Writes an audit row in extraction_validation_audit on every validation.
+
+    `reason` is the audit explanation (also stored on extractions.validation_notes).
+    `notes` is optional extra context that only lives in the audit row.
+    """
+    effective_reason = (reason or validation_notes or "").strip()
     res = await call_function(
         "sp_validate_extraction",
-        extraction_id, validated_by, validation_notes,
+        extraction_id, validated_by, effective_reason, notes,
     )
     if not res.ok:
         if res.errornumber == 1016:
@@ -1713,6 +1746,63 @@ async def proc_validate_extraction(  # type: ignore[override]
             raise ValueError(res.errormessage)
         raise RuntimeError(res.errormessage)
     return res.result
+
+
+async def proc_unvalidate_extraction(
+    *,
+    extraction_id: str,
+    unvalidated_by: str,
+    reason: str,
+    notes: str | None = None,
+) -> dict:
+    """
+    Phase 2 — reverts a validated extraction. Writes an audit row.
+
+    Raises:
+      ValueError on 1008 / 1012 / 1014 / 1019 (validation / not-validated /
+        not-found / missing args)
+      RuntimeError on unexpected DB failures (5000)
+    """
+    res = await call_function(
+        "sp_unvalidate_extraction",
+        extraction_id, unvalidated_by, reason, notes,
+    )
+    if not res.ok:
+        if res.errornumber in (1008, 1012, 1014, 1019):
+            raise ValueError(res.errormessage)
+        raise RuntimeError(res.errormessage)
+    return res.result
+
+
+async def proc_validation_history(
+    extraction_id: str,
+    limit: int = 10,
+) -> list[dict]:
+    """fn_extraction_validation_history — newest-first audit events."""
+    from db.pool import get_pool
+
+    eid = _to_uuid(extraction_id)
+    if eid is None:
+        return []
+
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM fn_extraction_validation_history($1::uuid, $2::int)",
+            eid, int(limit),
+        )
+
+    out: list[dict] = []
+    for r in rows:
+        d = dict(r)
+        for k, v in list(d.items()):
+            if isinstance(v, uuid.UUID):
+                d[k] = str(v)
+            elif isinstance(v, datetime):
+                d[k] = v.isoformat()
+            elif hasattr(v, "isoformat"):
+                d[k] = v.isoformat()
+        out.append(d)
+    return out
 
 
 # proc_get_extraction: defined earlier (line ~1483) as the call_proc-based

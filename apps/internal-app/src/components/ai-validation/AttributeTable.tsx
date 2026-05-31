@@ -22,7 +22,9 @@ export default function AttributeTable({
         </thead>
         <tbody>
           {rows.map((row: any) => {
-            const isEditing = editingKey === row.attribute.id;
+            // Defensive: even if a stale editingKey points at this row,
+            // refuse to enter edit mode when the extraction is locked.
+            const isEditing = editingKey === row.attribute.id && !row.readOnly;
             const draftValue = draftValues[row.attribute.id] ?? row.displayValue ?? "";
 
             return (
@@ -86,12 +88,22 @@ export default function AttributeTable({
                         {"✕"}
                       </button>
                     </div>
+                  ) : row.readOnly ? (
+                    // Extraction is validated — no edits allowed. Just show
+                    // a lock chip so reviewers know why nothing's clickable.
+                    <span
+                      className="inline-flex items-center justify-center min-h-[30px] px-3 border border-[rgba(46,222,190,0.45)] rounded-lg bg-[#d8fff6] text-[#0f6e5d] text-[11px] font-black font-montserrat uppercase tracking-wider"
+                      title="This extraction is validated and locked"
+                    >
+                      Locked
+                    </span>
                   ) : (
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <button
-                        className="flex justify-center items-center flex-none w-[34px] min-h-[30px] border border-line rounded-lg bg-white text-ink text-[15px] font-black font-montserrat leading-none cursor-pointer"
+                        className="flex justify-center items-center flex-none w-[34px] min-h-[30px] border border-line rounded-lg bg-white text-ink text-[15px] font-black font-montserrat leading-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-45"
                         type="button"
                         aria-label="Edit"
+                        disabled={row.readOnly}
                         onClick={() => {
                           setEditingKey(row.attribute.id);
                           setDraftValues((current: any) => ({
@@ -106,7 +118,7 @@ export default function AttributeTable({
                         className="flex justify-center items-center flex-1 min-w-[82px] min-h-[30px] border border-[rgba(46,222,190,0.45)] rounded-lg bg-white text-[#137765] text-xs font-black font-montserrat leading-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-45"
                         type="button"
                         aria-label="Approve"
-                        disabled={row.isNull || row.isApproved}
+                        disabled={row.isNull || row.isApproved || row.readOnly}
                         onClick={() => onApprove(row.attribute.id, row.displayValue)}
                       >
                         {"✓"}
@@ -115,7 +127,7 @@ export default function AttributeTable({
                         className="flex justify-center items-center flex-1 min-w-[82px] min-h-[30px] border border-[rgba(202,78,78,0.35)] rounded-lg bg-white text-red text-xs font-black font-montserrat leading-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-45"
                         type="button"
                         aria-label="Reject"
-                        disabled={row.isNull || row.isRejected}
+                        disabled={row.isNull || row.isRejected || row.readOnly}
                         onClick={() => onReject(row.attribute.id)}
                       >
                         {"✕"}

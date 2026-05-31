@@ -10,6 +10,24 @@ export interface RawField {
   touch_point: string;
 }
 
+/**
+ * Migration-022 detail shape returned by fn_get_extraction. The list endpoint
+ * (fn_list_extractions) does NOT include fields — call fetchExtraction(id)
+ * for the detail view.
+ */
+export interface ExtractionField {
+  field_id: number;
+  touch_point: string;
+  attribute: string;
+  display_order: number;
+  value: any;
+  confidence: number;
+  confidence_level: string;
+  source: string;
+  agent: string | null;
+  updated_at?: string;
+}
+
 export interface Extraction {
   id: string;
   client_id: string;
@@ -20,8 +38,18 @@ export interface Extraction {
   extracted_at: string;
   duration_seconds: number;
   total_fields: number;
-  raw_data: Record<string, RawField>;
-  // Joined names from the meeting row — present when fetched via /extractions.
+  /**
+   * DETAIL ONLY (fn_get_extraction). Empty / undefined on list rows.
+   * Backward-compat projection of the normalized extraction_fields rows
+   * into the legacy dict shape so existing UI code keeps working.
+   */
+  raw_data?: Record<string, RawField>;
+  /**
+   * DETAIL ONLY. Normalized array — preferred for new UI code as it
+   * preserves display_order and includes touch_point + attribute.
+   */
+  fields?: ExtractionField[];
+  // Joined meeting context — present on both list and detail.
   meeting_title?: string;
   meeting_start_time?: string;
   meeting_agenda?: string;
@@ -32,6 +60,7 @@ export interface Extraction {
   version?: number;
   validated: boolean;
   validated_by: string | null;
+  validated_by_name?: string | null;
   validated_at: string | null;
   validation_notes: string | null;
   created_at: string;
@@ -273,6 +302,47 @@ export async function fetchExtractionForMeeting(meetingId: string): Promise<Extr
   return all.find((e) => e.meeting_id === meetingId) ?? null;
 }
 
+/** Fetch a single extraction by id with all field values + recent edits. */
+export async function fetchExtraction(extractionId: string): Promise<Extraction> {
+  const res = await meetingAxios.get<Extraction>(`/api/extractions/${extractionId}`);
+  return res.data;
+}
+
+// ─── Validation lifecycle (Phase 2) ────────────────────────────────────────
+
+export interface ValidationAuditEntry {
+  id: string;
+  action: "validated" | "unvalidated";
+  performed_by: string;
+  performed_by_name: string | null;
+  performed_at: string;
+  reason: string;
+  notes: string | null;
+  prior_version: number | null;
+}
+
+export async function fetchValidationHistory(
+  extractionId: string,
+  limit = 10,
+): Promise<ValidationAuditEntry[]> {
+  const res = await meetingAxios.get<ValidationAuditEntry[]>(
+    `/api/extractions/${extractionId}/validation-history?limit=${limit}`,
+  );
+  return res.data;
+}
+
+export async function unvalidateExtraction(
+  extractionId: string,
+  reason: string,
+  notes?: string,
+): Promise<any> {
+  const res = await meetingAxios.post(
+    `/api/extractions/${extractionId}/unvalidate`,
+    { reason, notes },
+  );
+  return res.data;
+}
+
 export async function fetchExtractions(validated?: boolean): Promise<Extraction[]> {
   const url = validated !== undefined
     ? `/api/extractions/?validated=${validated}`
@@ -286,11 +356,17 @@ export async function fetchExtractions(validated?: boolean): Promise<Extraction[
 // just hits the endpoint; field edits go through patchExtractionFields below.
 export async function validateExtraction(
   extractionId: string,
+  reason: string,
   notes?: string,
-): Promise<{ extraction_id: string; validated: boolean; version: number }> {
-  const res = await meetingAxios.post<{ extraction_id: string; validated: boolean; version: number }>(
+): Promise<{ extraction_id: string; validated: boolean; version: number; audit_id?: string }> {
+  const res = await meetingAxios.post<{
+    extraction_id: string;
+    validated: boolean;
+    version: number;
+    audit_id?: string;
+  }>(
     `/api/extractions/${extractionId}/validate`,
-    { validation_notes: notes ?? null },
+    { reason, notes: notes ?? null },
   );
   return res.data;
 }
@@ -351,11 +427,14 @@ export const FIELD_ID_TO_ATTR_ID: Record<number, string> = {
   100: "communicationPreference",
 };
 
-export function extractionToMeetingValues(raw: Record<string, RawField>): Record<string, any> {
+export function extractionToMeetingValues(
+  raw: Record<string, RawField> | undefined | null,
+): Record<string, any> {
   const values: Record<string, any> = {};
+  if (!raw) return values;
   for (const [fieldId, field] of Object.entries(raw)) {
     const attrId = FIELD_ID_TO_ATTR_ID[Number(fieldId)];
-    if (attrId && field.value !== null && field.value !== undefined) {
+    if (attrId && field?.value !== null && field?.value !== undefined) {
       values[attrId] = String(field.value);
     }
   }

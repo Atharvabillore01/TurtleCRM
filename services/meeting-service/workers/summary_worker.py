@@ -31,6 +31,21 @@ async def _handle_summarize(payload: dict) -> None:
         logger.error("summary_worker_extraction_not_found", extra={"error": str(exc), "extraction_id": extraction_id})
         return
 
+    # proc_get_extraction returns a dict (after migration 022). The fields
+    # used to live in `raw_data`; now they're either `raw_data` (projected
+    # for backward-compat by _fn_get_extraction) or the new `fields` array.
+    # Tolerate both shapes here.
+    if isinstance(extraction, dict):
+        extraction_payload = (
+            extraction.get("raw_data")
+            or extraction.get("fields")
+            or {}
+        )
+    else:
+        # Old dataclass-style result (pre-022 path that no longer hits this branch
+        # in production but harmless to keep)
+        extraction_payload = getattr(extraction, "raw_data", None) or {}
+
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
             resp = await client.post(
@@ -39,7 +54,7 @@ async def _handle_summarize(payload: dict) -> None:
                     "transcript": transcript,
                     "meeting_id": meeting_id,
                     "client_id": client_id,
-                    "extraction": extraction.raw_data,
+                    "extraction": extraction_payload,
                 },
             )
             resp.raise_for_status()
@@ -98,4 +113,24 @@ async def _handle_summarize(payload: dict) -> None:
 
 
 async def run_summary_worker() -> None:
-    await start_consumer("extraction.summarize", "meeting-service-summary", _handle_summarize)
+    """Supervises the extraction.summarize consumer. See transcript_processor.py
+    for the full rationale — same cold-start race + silent task-death pattern."""
+    import asyncio as _asyncio
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            await start_consumer(
+                "extraction.summarize",
+                "meeting-service-summary",
+                _handle_summarize,
+            )
+            logger.warning("summary_worker_consumer_returned", extra={"attempt": attempt})
+        except Exception as exc:
+            backoff = min(30, 2 ** min(attempt, 5))
+            logger.exception("summary_worker_consumer_failed", extra={
+                "attempt": attempt,
+                "next_retry_s": backoff,
+                "error": str(exc),
+            })
+            await _asyncio.sleep(backoff)
