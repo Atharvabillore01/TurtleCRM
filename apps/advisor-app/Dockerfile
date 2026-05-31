@@ -23,7 +23,9 @@ COPY apps/advisor-app/tailwind.config.js  ./apps/advisor-app/tailwind.config.js
 COPY apps/advisor-app/postcss.config.js   ./apps/advisor-app/postcss.config.js
 
 ARG VITE_AUTH_SERVICE_URL=
+ARG VITE_BASE_URL=/
 ENV VITE_AUTH_SERVICE_URL=$VITE_AUTH_SERVICE_URL
+ENV VITE_BASE_URL=$VITE_BASE_URL
 
 WORKDIR /repo/apps/advisor-app
 RUN npm run build

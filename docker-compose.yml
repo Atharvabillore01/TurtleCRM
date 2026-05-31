@@ -243,6 +243,8 @@ services:
       dockerfile: apps/advisor-app/Dockerfile
       args:
         VITE_AUTH_SERVICE_URL: ${VITE_AUTH_SERVICE_URL:-}
+        # SPA base path. "/" local dev, "/advisor/" behind nginx in prod.
+        VITE_BASE_URL: ${ADVISOR_APP_BASE_URL:-/}
     restart: unless-stopped
     ports:
       - "3001:3001"
@@ -268,6 +270,8 @@ services:
         VITE_USER_SERVICE_URL: ${VITE_USER_SERVICE_URL:-}
         VITE_MEETING_SERVICE_URL: ${VITE_MEETING_SERVICE_URL:-}
         VITE_SHOW_DEV_TOGGLE: ${VITE_SHOW_DEV_TOGGLE:-false}
+        # SPA base path. "/" local dev, "/internal/" behind nginx in prod.
+        VITE_BASE_URL: ${INTERNAL_APP_BASE_URL:-/}
     restart: unless-stopped
     ports:
       - "3002:3002"

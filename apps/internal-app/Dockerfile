@@ -26,11 +26,15 @@ ARG VITE_AUTH_SERVICE_URL=
 ARG VITE_USER_SERVICE_URL=
 ARG VITE_MEETING_SERVICE_URL=
 ARG VITE_SHOW_DEV_TOGGLE=false
+# Public path the SPA is served from. "/" for standalone, "/internal/"
+# when reverse-proxied behind nginx in production.
+ARG VITE_BASE_URL=/
 
 ENV VITE_AUTH_SERVICE_URL=$VITE_AUTH_SERVICE_URL
 ENV VITE_USER_SERVICE_URL=$VITE_USER_SERVICE_URL
 ENV VITE_MEETING_SERVICE_URL=$VITE_MEETING_SERVICE_URL
 ENV VITE_SHOW_DEV_TOGGLE=$VITE_SHOW_DEV_TOGGLE
+ENV VITE_BASE_URL=$VITE_BASE_URL
 
 WORKDIR /repo/apps/internal-app
 RUN npm run build
@@ -40,8 +44,13 @@ FROM nginx:alpine AS runner
 
 COPY --from=builder /repo/apps/internal-app/dist /usr/share/nginx/html
 
-# SPA fallback: all routes serve index.html (no path prefix; the app is mounted at /)
-RUN printf 'server {\n  listen 3002;\n  root /usr/share/nginx/html;\n  index index.html;\n  location / { try_files $uri $uri/ /index.html; }\n}\n' \
+# SPA serving — handles both modes:
+#   - Behind reverse-proxy (prod) that strips /internal/ → requests arrive as /…
+#                                                          handled by `location /`
+#   - Behind reverse-proxy (prod) that preserves /internal/ → requests arrive as /internal/…
+#                                                          handled by `location /internal/` (rewrites to / internally)
+#   - Direct hit (local dev) at localhost:3002          → `location /`
+RUN printf 'server {\n  listen 3002;\n  root /usr/share/nginx/html;\n  index index.html;\n\n  # Preserved-prefix path: strip /internal/ in-place\n  location /internal/ {\n    rewrite ^/internal/(.*)$ /$1 break;\n    try_files $uri $uri/ /index.html;\n  }\n\n  # Default: proxy already stripped the prefix OR no prefix in use\n  location / {\n    try_files $uri $uri/ /index.html;\n  }\n}\n' \
     > /etc/nginx/conf.d/default.conf
 
 EXPOSE 3002
