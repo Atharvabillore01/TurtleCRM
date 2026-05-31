@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import RecentMeetingRail from "./RecentMeetingRail";
 import MeetingOverview from "./MeetingOverview";
 import ReviewModal, { mapCategoryToTouchPoint } from "./ReviewModal";
+import ValidationHistoryBanner from "./ValidationHistoryBanner";
 
 export default function AiValidationView({
   recentMeetings,
@@ -28,6 +29,14 @@ export default function AiValidationView({
   onTaskUndoDecline,
   onTaskUpdate,
   onManualTask,
+  isExtractionValidated = false,
+  onValidateAll,
+  onUnvalidate,
+  historyRefreshKey = 0,
+  listFilter = "all",
+  setListFilter,
+  counts = { pending: 0, validated: 0, all: 0 },
+  children,
 }: any) {
   const [isReviewOpen, setIsReviewOpen] = useState(false);
   const [reviewTab, setReviewTab] = useState("attributes");
@@ -60,6 +69,9 @@ export default function AiValidationView({
           meetings={recentMeetings}
           selectedMeetingId={selectedMeetingId}
           onSelectMeeting={onSelectMeeting}
+          listFilter={listFilter}
+          setListFilter={setListFilter}
+          counts={counts}
         />
 
         <section
@@ -74,7 +86,50 @@ export default function AiValidationView({
                 Advisor: {selectedClient.advisor} | Location: {selectedClient.location}
               </span>
             </div>
+            <div className="flex items-center gap-2 mobile:flex-col mobile:items-stretch">
+              {isExtractionValidated ? (
+                <>
+                  <span
+                    className="inline-flex items-center gap-1.5 min-h-[34px] px-3 border border-[rgba(46,222,190,0.45)] rounded-full bg-[#d8fff6] text-[#0f6e5d] text-xs font-extrabold"
+                    title="This extraction has been validated and is locked from edits"
+                  >
+                    <span aria-hidden="true">🔒</span> Validated · locked
+                  </span>
+                  {onUnvalidate && (
+                    <button
+                      type="button"
+                      onClick={onUnvalidate}
+                      className="inline-flex items-center min-h-[34px] px-3 border border-[rgba(202,78,78,0.45)] rounded-lg bg-white text-red text-xs font-black uppercase tracking-wider hover:bg-[rgba(202,78,78,0.06)]"
+                      title="Reopen this extraction for editing (audit row will be created)"
+                    >
+                      ↺ Unvalidate
+                    </button>
+                  )}
+                </>
+              ) : (
+                onValidateAll && (
+                  <button
+                    type="button"
+                    onClick={onValidateAll}
+                    className="inline-flex items-center min-h-[34px] px-4 border border-[#138773] rounded-lg bg-[#138773] text-white text-xs font-black uppercase tracking-wider hover:opacity-90"
+                    title="Mark this extraction as reviewed. Locks editing."
+                  >
+                    ✓ Validate extraction
+                  </button>
+                )
+              )}
+            </div>
           </div>
+
+          {/* Validation-history banner — appears once any validate/unvalidate
+              event exists for this extraction. Refetches when historyRefreshKey
+              changes (i.e. immediately after a successful transition). */}
+          {selectedMeeting?.id && (
+            <ValidationHistoryBanner
+              extractionId={selectedMeeting.id}
+              refreshKey={historyRefreshKey}
+            />
+          )}
 
           {/* Simple Task Tracker Snapshot */}
           <section className="p-4 border border-line rounded-lg bg-[rgba(255,255,255,0.96)] shadow-card min-w-0 mb-4" aria-label="Meeting tasks snapshot">
@@ -174,6 +229,9 @@ export default function AiValidationView({
           initialActiveTab={reviewTab}
         />
       )}
+
+      {/* Reject-with-replacement modal lives here so it overlays the workspace */}
+      {children}
     </>
   );
 }

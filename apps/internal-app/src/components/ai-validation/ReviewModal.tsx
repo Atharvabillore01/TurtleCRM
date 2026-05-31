@@ -69,7 +69,8 @@ function AttributeRow({
   onApprove,
   onReject,
 }: any) {
-  const isEditing = editingKey === row.attribute.id;
+  // Defensive: a stale editingKey must not unlock a locked row.
+  const isEditing = editingKey === row.attribute.id && !row.readOnly;
   const draftValue = draftValues[row.attribute.id] ?? row.displayValue ?? "";
 
   return (
@@ -137,21 +138,29 @@ function AttributeRow({
               Cancel
             </button>
           </>
+        ) : row.readOnly ? (
+          <span
+            className="inline-flex items-center min-h-[28px] px-2.5 border border-[rgba(46,222,190,0.45)] rounded-lg bg-[#d8fff6] text-[#0f6e5d] text-[10px] font-black uppercase tracking-wider"
+            title="Validated extraction — edits locked"
+          >
+            Locked
+          </span>
         ) : (
           <>
             <button
               type="button"
+              disabled={row.readOnly}
               onClick={() => {
                 setEditingKey(row.attribute.id);
                 setDraftValues((c: any) => ({ ...c, [row.attribute.id]: row.displayValue ?? "" }));
               }}
-              className="min-h-[28px] px-2.5 border border-line rounded-lg bg-white text-ink text-xs font-black cursor-pointer hover:bg-[#f5f5f5]"
+              className="min-h-[28px] px-2.5 border border-line rounded-lg bg-white text-ink text-xs font-black cursor-pointer hover:bg-[#f5f5f5] disabled:opacity-35 disabled:cursor-not-allowed"
             >
               Edit
             </button>
             <button
               type="button"
-              disabled={row.isNull || row.isApproved}
+              disabled={row.isNull || row.isApproved || row.readOnly}
               onClick={() => onApprove(row.attribute.id, row.displayValue)}
               className="min-h-[28px] px-2.5 border border-[rgba(46,222,190,0.5)] rounded-lg bg-white text-[#137765] text-xs font-black cursor-pointer hover:bg-[rgba(46,222,190,0.06)] disabled:opacity-35 disabled:cursor-not-allowed"
             >
@@ -159,7 +168,7 @@ function AttributeRow({
             </button>
             <button
               type="button"
-              disabled={row.isNull || row.isRejected}
+              disabled={row.isNull || row.isRejected || row.readOnly}
               onClick={() => onReject(row.attribute.id)}
               className="min-h-[28px] px-2.5 border border-[rgba(202,78,78,0.4)] rounded-lg bg-white text-red text-xs font-black cursor-pointer hover:bg-[rgba(202,78,78,0.05)] disabled:opacity-35 disabled:cursor-not-allowed"
             >
