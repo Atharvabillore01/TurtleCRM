@@ -40,6 +40,7 @@ AVAILABLE_AGENTS: list[dict] = [
     {"name": "QualitativeAgent",   "touch_point": "Qualitative Parameters",      "phase": 1},
     {"name": "TaskAgent",          "touch_point": "Task Priority",               "phase": 2},
     {"name": "FeedbackAgent",      "touch_point": "Custom Fields",               "phase": 3},
+    {"name": "AdvisoryAgent",      "touch_point": "AI Advisory",                 "phase": 3},
     {"name": "SystemResolver",     "touch_point": "Turtle ID",                   "phase": 0},
 ]
 

@@ -62,3 +62,7 @@ transcripts/
 procs/
 procs.zip
 turtle - Copy/
+
+# ─── Python build artifacts ──────────────────────────────────────────────────
+__pycache__/
+*.pyc

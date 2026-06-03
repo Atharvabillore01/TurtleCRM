@@ -6,7 +6,7 @@ import React, {
   useRef,
   type ReactNode,
 } from "react";
-import { authAxios, setAxiosToken } from "../api/axios.js";
+import { authAxios, setAxiosToken, refreshAccessToken } from "../api/axios.js";
 import type { JWTPayload } from "@turtle/types";
 
 interface AuthState {
@@ -64,8 +64,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (secs <= 0) return;
     refreshTimerRef.current = setTimeout(async () => {
       try {
-        const res = await authAxios.post<{ accessToken: string }>("/auth/refresh", {});
-        login(res.data.accessToken);
+        const token = await refreshAccessToken();
+        login(token);
       } catch {
         setAccessToken(null);
         setAxiosToken(null);
@@ -107,9 +107,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     (async () => {
       try {
-        const res = await authAxios.post<{ accessToken: string }>("/auth/refresh", {});
+        const token = await refreshAccessToken();
         if (cancelled) return;
-        login(res.data.accessToken);
+        login(token);
       } catch (err: unknown) {
         // 401 → stale/orphaned refresh cookie. Clear it server-side so the
         // next page load doesn't repeat the same failed refresh.

@@ -55,6 +55,10 @@ export interface Extraction {
   meeting_agenda?: string;
   client_names?: string[];
   adviser_names?: string[];
+  // Token totals (migration 025). Present on list rows; 0 for pre-025 extractions.
+  total_input_tokens?: number;
+  total_output_tokens?: number;
+  total_tokens?: number;
   // Optimistic-concurrency marker. Passed back to sp_patch_extraction_fields
   // as expected_version on each edit; bumped on every successful patch.
   version?: number;
@@ -63,7 +67,27 @@ export interface Extraction {
   validated_by_name?: string | null;
   validated_at: string | null;
   validation_notes: string | null;
+  /**
+   * DETAIL ONLY (migration 027). Standalone AdvisoryAgent call-quality /
+   * advisor-coaching report — NOT a CRM field. Null when the agent produced
+   * nothing or the AdvisoryAgent did not run.
+   */
+  call_analysis?: CallAnalysis | null;
   created_at: string;
+}
+
+/**
+ * Advisor-coaching report produced by the crm-agent AdvisoryAgent
+ * (analyze_call). Shape is best-effort — any field may be absent.
+ */
+export interface CallAnalysis {
+  agent?: string;
+  agenda?: string;
+  agenda_coverage?: string;
+  questions_advisor_could_ask?: string[];
+  information_gaps?: string[];
+  communication_coaching?: string[];
+  how_call_could_be_better?: string;
 }
 
 export interface MeetingRecord {
@@ -306,6 +330,56 @@ export async function fetchExtractionForMeeting(meetingId: string): Promise<Extr
 export async function fetchExtraction(extractionId: string): Promise<Extraction> {
   const res = await meetingAxios.get<Extraction>(`/api/extractions/${extractionId}`);
   return res.data;
+}
+
+// ─── Token usage (migration 025) ────────────────────────────────────────────
+
+export interface AgentTokenUsage {
+  agent: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
+export interface ExtractionTokenUsage {
+  extraction_id: string;
+  agents: AgentTokenUsage[];
+  total: {
+    input_tokens: number;
+    output_tokens: number;
+    total_tokens: number;
+  };
+}
+
+/** Per-agent token consumption for one extraction ("which agent charged how much"). */
+export async function fetchExtractionTokenUsage(
+  extractionId: string,
+): Promise<ExtractionTokenUsage> {
+  const res = await meetingAxios.get<ExtractionTokenUsage>(
+    `/api/extractions/${extractionId}/token-usage`,
+  );
+  return res.data;
+}
+
+// crm-agent emits short agent keys; map them to the canonical display names
+// used elsewhere in the app. Unknown keys are title-cased as a fallback.
+export const AGENT_KEY_TO_LABEL: Record<string, string> = {
+  demographics: "Demographics Agent",
+  finance:      "Finance Agent",
+  goals:        "Goals Agent",
+  professional: "Professional Agent",
+  schedule:     "Schedule Agent",
+  qualitative:  "Qualitative Agent",
+  task:         "Task Agent",
+  feedback:     "Feedback Agent",
+  system:       "System Resolver",
+};
+
+export function agentLabel(key: string): string {
+  return (
+    AGENT_KEY_TO_LABEL[key] ??
+    key.replace(/(^|_)(\w)/g, (_m, _s, c) => " " + c.toUpperCase()).trim()
+  );
 }
 
 // ─── Validation lifecycle (Phase 2) ────────────────────────────────────────

@@ -35,6 +35,7 @@ ALL_EXTRACTION_AGENTS = [
     "QualitativeAgent",
     "TaskAgent",
     "FeedbackAgent",
+    "AdvisoryAgent",
     "SystemResolver",
 ]
 
@@ -155,7 +156,13 @@ async def _handle_transcribed(payload: dict) -> None:
     # The log lines below let you tell which one.
     _fields_payload = extraction_data.get("fields", extraction_data)
     _agents_meta    = extraction_data.get("agents") or extraction_data.get("agents_run") or []
+    # token_usage is keyed by agent with a synthetic "__total__" entry:
+    #   { "demographics": {input_tokens, output_tokens, total_tokens}, ...,
+    #     "__total__": {...} }
+    # The per-meeting total lives under "__total__" — the old code read flat
+    # input_tokens/output_tokens off the top level (always None). Fixed here.
     _token_usage    = extraction_data.get("token_usage") or {}
+    _token_total    = _token_usage.get("__total__", {}) if isinstance(_token_usage, dict) else {}
 
     if isinstance(_fields_payload, dict):
         _field_ids       = sorted([int(k) for k in _fields_payload.keys() if str(k).isdigit()])
@@ -186,8 +193,10 @@ async def _handle_transcribed(payload: dict) -> None:
         "model":              extraction_data.get("model"),
         "wall_seconds":       round(duration, 2),
         "agent_duration_s":   extraction_data.get("duration_seconds"),
-        "input_tokens":       _token_usage.get("input_tokens"),
-        "output_tokens":      _token_usage.get("output_tokens"),
+        "input_tokens":       _token_total.get("input_tokens"),
+        "output_tokens":      _token_total.get("output_tokens"),
+        "total_tokens":       _token_total.get("total_tokens"),
+        "agents_with_tokens": [k for k in _token_usage if k != "__total__"] if isinstance(_token_usage, dict) else [],
         "sample_fields":      _sample,
     })
 
@@ -202,6 +211,16 @@ async def _handle_transcribed(payload: dict) -> None:
             duration_seconds=round(duration, 3),
             total_fields=len(extraction_data.get("fields", extraction_data)),
             raw_data=extraction_data.get("fields", extraction_data),
+            # Migration 025: persist per-agent token usage. sp_save_extraction
+            # explodes this into extraction_token_usage rows ("__total__" skipped).
+            token_usage=_token_usage if isinstance(_token_usage, dict) else None,
+            # Migration 027: standalone AdvisoryAgent coaching report (NOT a
+            # CRM field). Stored verbatim on extractions.call_analysis.
+            call_analysis=(
+                extraction_data.get("call_analysis")
+                if isinstance(extraction_data.get("call_analysis"), dict)
+                else None
+            ),
         )
     except (ValueError, RuntimeError) as exc:
         logger.error("save_extraction_failed", extra={

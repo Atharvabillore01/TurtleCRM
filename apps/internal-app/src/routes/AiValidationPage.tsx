@@ -196,6 +196,8 @@ export default function AiValidationPage() {
                 // NEW: keep the full enriched fields[] for the new
                 // DB-driven row builder below.
                 extractedFields: fieldsArr,
+                // Migration 027: standalone AdvisoryAgent coaching report.
+                callAnalysis: detail.call_analysis ?? null,
               };
             }),
           })),
@@ -276,10 +278,16 @@ export default function AiValidationPage() {
     // field, enriched with attribute label + touch_point from
     // field_definitions). Falls back to the legacy mock `attributes` list
     // only when no fields are loaded yet (initial render / no extraction).
-    const sourceFields: any[] =
+    const sourceFields: any[] = (
       Array.isArray(selectedMeeting.extractedFields) && selectedMeeting.extractedFields.length > 0
         ? selectedMeeting.extractedFields
-        : [];
+        : []
+    ).filter((f: any) => {
+      // Hide Y/N fields that came back negative — a bare "N" (or "No") is
+      // noise in the review list, treated like an empty value.
+      const v = String(f?.value ?? "").trim().toUpperCase();
+      return v !== "N" && v !== "NO";
+    });
 
     if (sourceFields.length === 0) {
       // No extracted fields available — render an empty list. The page

@@ -1603,6 +1603,8 @@ async def proc_save_extraction(
     extracted_at: str | None = None,
     duration_seconds: float = 0,
     total_fields: int | None = None,
+    token_usage: dict | None = None,   # migration 025 — per-agent token breakdown
+    call_analysis: dict | None = None, # migration 027 — AdvisoryAgent coaching report
     **legacy_kwargs,                # swallows `client_id` and any other legacy kwargs
 ) -> str:
     # asyncpg JSONB codec isn't guaranteed registered — pass a JSON string
@@ -1628,10 +1630,30 @@ async def proc_save_extraction(
     # total_fields). The legacy `total_fields` kwarg is accepted for
     # caller backward-compat but intentionally NOT passed to the SP.
     _ = total_fields   # silence the unused-warning; kept for back-compat
+
+    # Migration 025: p_token_usage is the 9th positional arg. crm-agent
+    # returns it keyed by agent ({ "demographics": {...}, "__total__": {...} }).
+    # call_function json.dumps a dict for jsonb; None → SQL NULL (no rows
+    # exploded). Pass a JSON string so empty/unusual shapes still cast cleanly.
+    token_usage_json = (
+        _json.dumps(token_usage)
+        if isinstance(token_usage, dict) and token_usage
+        else None
+    )
+    # Migration 027: p_call_analysis is the 10th positional arg. crm-agent
+    # returns it as a standalone coaching blob (NOT a CRM field). Pass a JSON
+    # string (mirrors token_usage); empty/missing → None → SQL NULL.
+    call_analysis_json = (
+        _json.dumps(call_analysis)
+        if isinstance(call_analysis, dict) and call_analysis
+        else None
+    )
     res = await call_function(
         "sp_save_extraction",
         meeting_id, extraction_job_id, provider, model, raw_data_json,
         transcript_id, extracted_at_dt, duration_seconds,
+        token_usage_json,
+        call_analysis_json,
     )
     if not res.ok:
         if res.errornumber in (1008, 1014):
@@ -1802,6 +1824,39 @@ async def proc_validation_history(
             elif hasattr(v, "isoformat"):
                 d[k] = v.isoformat()
         out.append(d)
+    return out
+
+
+async def proc_extraction_token_usage(extraction_id: str) -> list[dict]:
+    """
+    fn_extraction_token_usage — per-agent token consumption for one
+    extraction, biggest consumer first. Powers the Token Usage screen.
+
+    Plain table function (no 4-col envelope) — fetch directly. Returns an
+    empty list for an unknown id or for pre-025 extractions (no token rows).
+    """
+    from db.pool import get_pool
+
+    eid = _to_uuid(extraction_id)
+    if eid is None:
+        return []
+
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM fn_extraction_token_usage($1::uuid)",
+            eid,
+        )
+
+    out: list[dict] = []
+    for r in rows:
+        d = dict(r)
+        # input/output/total are plain INTEGERs; agent is text — all JSON-safe.
+        out.append({
+            "agent":         d.get("agent"),
+            "input_tokens":  int(d.get("input_tokens") or 0),
+            "output_tokens": int(d.get("output_tokens") or 0),
+            "total_tokens":  int(d.get("total_tokens") or 0),
+        })
     return out
 
 

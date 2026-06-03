@@ -8,16 +8,35 @@ const USER_BASE_URL    = import.meta.env["VITE_USER_SERVICE_URL"]    ?? "";
 const MEETING_BASE_URL = import.meta.env["VITE_MEETING_SERVICE_URL"] ?? "";
 
 let _accessToken: string | null = null;
-let _isRefreshing = false;
-let _refreshQueue: Array<(token: string | null) => void> = [];
+let _refreshPromise: Promise<string> | null = null;
 
 export function setAxiosToken(token: string | null): void {
   _accessToken = token;
 }
 
-function processQueue(token: string | null): void {
-  _refreshQueue.forEach((cb) => cb(token));
-  _refreshQueue = [];
+/**
+ * Refresh the access token via the httpOnly refresh cookie — DEDUPLICATED.
+ *
+ * Concurrent callers (React StrictMode double-mounting the AuthProvider, the
+ * scheduled pre-expiry refresh racing the 401 interceptor, multiple in-flight
+ * requests all 401-ing at once) share ONE in-flight request. This is essential
+ * because POST /auth/refresh ROTATES the refresh token (single-use): firing it
+ * twice consumes the token and 401s the second call, which logged the user out
+ * on every reload.
+ */
+export function refreshAccessToken(): Promise<string> {
+  if (_refreshPromise) return _refreshPromise;
+  _refreshPromise = axios
+    .post<{ accessToken: string }>(`${BASE_URL}/auth/refresh`, {}, { withCredentials: true })
+    .then((res) => {
+      const token = res.data.accessToken;
+      setAxiosToken(token);
+      return token;
+    })
+    .finally(() => {
+      _refreshPromise = null;
+    });
+  return _refreshPromise;
 }
 
 export const authAxios: AxiosInstance = axios.create({
@@ -79,39 +98,16 @@ authAxios.interceptors.response.use(
       return Promise.reject(error);
     }
 
-    if (_isRefreshing) {
-      return new Promise((resolve, reject) => {
-        _refreshQueue.push((newToken) => {
-          if (newToken) {
-            original.headers.set("Authorization", `Bearer ${newToken}`);
-            resolve(authAxios(original));
-          } else {
-            reject(error);
-          }
-        });
-      });
-    }
-
     original._retry = true;
-    _isRefreshing   = true;
 
     try {
-      const res = await axios.post<{ accessToken: string }>(
-        `${BASE_URL}/auth/refresh`,
-        {},
-        { withCredentials: true }
-      );
-      const newToken = res.data.accessToken;
-      setAxiosToken(newToken);
-      processQueue(newToken);
+      // Deduped: all concurrent 401s share one rotation (see refreshAccessToken).
+      const newToken = await refreshAccessToken();
       original.headers.set("Authorization", `Bearer ${newToken}`);
       return authAxios(original);
     } catch (err) {
       setAxiosToken(null);
-      processQueue(null);
       return Promise.reject(err);
-    } finally {
-      _isRefreshing = false;
     }
   }
 );
