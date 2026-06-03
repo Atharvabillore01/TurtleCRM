@@ -35,7 +35,11 @@ services:
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     healthcheck:
-      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      # `ping` only proves the Erlang node is alive — it goes healthy BEFORE the
+      # AMQP listener on 5672 accepts connections, so dependents start too early
+      # and spam "Connection refused" until boot finishes. check_port_connectivity
+      # verifies the configured listeners (incl. 5672) actually accept connections.
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
       interval: 15s
       timeout: 15s
       retries: 10

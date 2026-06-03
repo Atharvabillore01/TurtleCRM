@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from auth_dep import get_current_team_user
 from db.meeting_procs import (
+    proc_extraction_token_usage,
     proc_get_extraction,
     proc_list_extractions,
     proc_patch_extraction_fields,
@@ -32,6 +33,22 @@ async def get_extraction(extraction_id: str):
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     return row if isinstance(row, dict) else asdict(row)
+
+
+@router.get("/{extraction_id}/token-usage")
+async def get_extraction_token_usage(extraction_id: str):
+    """Per-agent token consumption for one extraction (Token Usage screen).
+
+    Returns a list of { agent, input_tokens, output_tokens, total_tokens }
+    ordered by total_tokens DESC, plus a computed grand total. Empty `agents`
+    for pre-025 extractions (token usage was not yet persisted)."""
+    agents = await proc_extraction_token_usage(extraction_id)
+    total = {
+        "input_tokens":  sum(a["input_tokens"]  for a in agents),
+        "output_tokens": sum(a["output_tokens"] for a in agents),
+        "total_tokens":  sum(a["total_tokens"]  for a in agents),
+    }
+    return {"extraction_id": extraction_id, "agents": agents, "total": total}
 
 
 # ── Per-field reviewer edits ──────────────────────────────────────────────────

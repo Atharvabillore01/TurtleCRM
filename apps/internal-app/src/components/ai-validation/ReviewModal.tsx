@@ -25,6 +25,7 @@ export const TOUCH_POINTS = [
   "Schedule & Communication",
   "Task Priority",
   "Custom Fields (text)",
+  "AI Advisory",
   "Attachments (PDFs)",
   "Qualitative Parameters",
   "Special Projects/VAS (opted)",
@@ -54,7 +55,23 @@ const PRIORITY_BADGE = {
   Low: "bg-[rgba(46,222,190,0.1)] text-[#137765] border-[rgba(46,222,190,0.25)]",
 };
 
+// Friendly labels for the crm-agent confidence levels. "not_extracted" (and
+// anything unknown) maps to nothing → the type chip is simply hidden.
+const CONFIDENCE_TYPE_LABELS: Record<string, string> = {
+  exact_quote: "Exact quote",
+  clearly_inferable: "Clearly inferable",
+  estimated: "Estimated",
+  indirect: "Indirect",
+  speculative: "Speculative",
+};
+
 export function mapCategoryToTouchPoint(category: any) {
+  // DB-driven extractions already carry a real touch-point name
+  // (fn_get_extraction → field_definitions.touch_point), so pass it through
+  // unchanged. Only the legacy mock category names need remapping.
+  if (typeof category === "string" && (TOUCH_POINTS as string[]).includes(category)) {
+    return category;
+  }
   return (CATEGORY_TO_TOUCH_POINT as any)[category] || "Internal";
 }
 
@@ -81,8 +98,22 @@ function AttributeRow({
     >
       {/* Attribute label */}
       <div className="min-w-0">
-        <p className="m-0 text-sm font-extrabold text-ink truncate">{row.attribute.label}</p>
-        <p className="m-0 text-[10px] text-muted">{row.attribute.id}</p>
+        <p className="m-0 text-sm font-extrabold text-ink truncate" title={row.attribute.label}>{row.attribute.label}</p>
+        {typeof row.confidence === "number" && row.confidence > 0 ? (
+          <span className="inline-flex items-center gap-1 mt-0.5 flex-wrap">
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                row.confidence >= 0.8 ? "bg-green" : row.confidence >= 0.6 ? "bg-[#f5a623]" : "bg-[#ddd]"
+              }`}
+            />
+            <span className="text-[10px] text-muted">{Math.round(row.confidence * 100)}% confidence</span>
+            {CONFIDENCE_TYPE_LABELS[row.confidence_level] && (
+              <span className="text-[10px] text-muted">· {CONFIDENCE_TYPE_LABELS[row.confidence_level]}</span>
+            )}
+          </span>
+        ) : (
+          <p className="m-0 text-[10px] text-muted">Not extracted</p>
+        )}
       </div>
 
       {/* Value */}
@@ -109,6 +140,14 @@ function AttributeRow({
             >
               {row.isNull ? "null" : row.displayValue}
             </span>
+            {!row.isNull && row.source && (
+              <span
+                className="text-[10px] text-muted italic leading-snug [overflow-wrap:anywhere] line-clamp-2"
+                title={row.source}
+              >
+                {row.source}
+              </span>
+            )}
             {row.isApproved && (
               <span className="text-green text-[10px] font-black">✓ Approved</span>
             )}
@@ -468,15 +507,13 @@ export default function ReviewModal({
   const sidebarItems = ["All", ...presentTouchPoints];
   const displayedTouchPoints =
     activeTouchPoint === "All" ? presentTouchPoints : [activeTouchPoint];
+  const firstTouchPoint = presentTouchPoints[0] ?? null;
 
-  // Auto-expand the correct accordion when sidebar navigation changes
+  // Auto-expand: the selected section, or the first present one in "All" view
+  // (so the panel never opens fully collapsed). Manual toggles still work.
   React.useEffect(() => {
-    if (activeTouchPoint !== "All") {
-      setExpandedAccordion(activeTouchPoint);
-    } else {
-      setExpandedAccordion(null); // Keep all closed when returning to 'All'
-    }
-  }, [activeTouchPoint]);
+    setExpandedAccordion(activeTouchPoint !== "All" ? activeTouchPoint : firstTouchPoint);
+  }, [activeTouchPoint, firstTouchPoint]);
 
   const fillPct = Math.round((filledCount / Math.max(rows.length, 1)) * 100);
 

@@ -4,6 +4,79 @@ import MeetingOverview from "./MeetingOverview";
 import ReviewModal, { mapCategoryToTouchPoint } from "./ReviewModal";
 import ValidationHistoryBanner from "./ValidationHistoryBanner";
 
+/**
+ * Read-only panel for the AdvisoryAgent call-quality / coaching report
+ * (migration 027). This is NOT a CRM field — it carries no validation
+ * actions. Renders nothing when there is no meaningful content.
+ */
+function CallAnalysisPanel({ callAnalysis }: { callAnalysis: any }) {
+  if (!callAnalysis || typeof callAnalysis !== "object") return null;
+
+  const coverage   = (callAnalysis.agenda_coverage || "").trim();
+  const overall    = (callAnalysis.how_call_could_be_better || "").trim();
+  const questions  = Array.isArray(callAnalysis.questions_advisor_could_ask)
+    ? callAnalysis.questions_advisor_could_ask.filter(Boolean) : [];
+  const gaps       = Array.isArray(callAnalysis.information_gaps)
+    ? callAnalysis.information_gaps.filter(Boolean) : [];
+  const coaching   = Array.isArray(callAnalysis.communication_coaching)
+    ? callAnalysis.communication_coaching.filter(Boolean) : [];
+
+  // Nothing meaningful → render nothing (the agent returns {} when it has
+  // no grounded analysis, and we never force-fill).
+  if (!coverage && !overall && !questions.length && !gaps.length && !coaching.length) {
+    return null;
+  }
+
+  const Block = ({ title, items }: { title: string; items: string[] }) =>
+    items.length === 0 ? null : (
+      <div className="mt-3">
+        <p className="m-0 text-[11px] font-black uppercase tracking-[0.04em] text-muted">{title}</p>
+        <ul className="mt-1 mb-0 pl-4 list-disc grid gap-1">
+          {items.map((it, i) => (
+            <li key={i} className="text-sm text-ink">{it}</li>
+          ))}
+        </ul>
+      </div>
+    );
+
+  return (
+    <section
+      className="mt-4 p-4 border border-line rounded-lg bg-[rgba(255,255,255,0.96)] shadow-card min-w-0"
+      aria-label="Call analysis and advisor coaching"
+    >
+      <div className="flex items-center justify-between gap-3 mb-1">
+        <div>
+          <h2>Call Analysis &amp; Advisor Coaching</h2>
+          <p className="mt-1 text-muted text-xs m-0">
+            AI-generated review of how the call met its agenda. Informational — not a CRM field.
+          </p>
+        </div>
+        <span className="text-[9px] px-1.5 py-0.5 rounded border border-line bg-surface-soft uppercase tracking-wider whitespace-nowrap">
+          AI generated
+        </span>
+      </div>
+
+      {coverage && (
+        <div className="mt-3">
+          <p className="m-0 text-[11px] font-black uppercase tracking-[0.04em] text-muted">Agenda coverage</p>
+          <p className="mt-1 mb-0 text-sm text-ink">{coverage}</p>
+        </div>
+      )}
+
+      <Block title="Questions the advisor could ask" items={questions} />
+      <Block title="Information gaps" items={gaps} />
+      <Block title="Communication coaching" items={coaching} />
+
+      {overall && (
+        <div className="mt-3">
+          <p className="m-0 text-[11px] font-black uppercase tracking-[0.04em] text-muted">How the call could be better</p>
+          <p className="mt-1 mb-0 text-sm text-ink">{overall}</p>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function AiValidationView({
   recentMeetings,
   selectedMeeting,
@@ -38,6 +111,8 @@ export default function AiValidationView({
   counts = { pending: 0, validated: 0, all: 0 },
   children,
 }: any) {
+  // Migration 027: standalone AdvisoryAgent coaching report (not a CRM field).
+  const callAnalysis = selectedMeeting?.callAnalysis ?? null;
   const [isReviewOpen, setIsReviewOpen] = useState(false);
   const [reviewTab, setReviewTab] = useState("attributes");
 
@@ -199,6 +274,10 @@ export default function AiValidationView({
               onStartReview={() => openReview("attributes")}
             />
           </section>
+
+          {/* Call Analysis — read-only AdvisoryAgent coaching report (027).
+              Not a CRM field; informational only, no validation actions. */}
+          <CallAnalysisPanel callAnalysis={callAnalysis} />
         </section>
       </div>
 
