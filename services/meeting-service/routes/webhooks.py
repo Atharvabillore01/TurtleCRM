@@ -47,8 +47,8 @@ TRANSCRIBED_EVENTS = {
     "transcript_ready",
     "TRANSCRIPT_READY",
     "Meeting Transcribed",
-}
-SUMMARIZED_EVENTS = {
+    # Fireflies fires meeting.summarized after transcription is complete;
+    # treat it as the trigger since meeting.transcribed never arrives in practice.
     "meeting.summarized",
     "Meeting completed",
     "meeting_completed",
@@ -121,8 +121,6 @@ async def firefly_webhook(request: Request):
 
     if event_type in TRANSCRIBED_EVENTS:
         await _handle_transcript_ready(firefly_meeting_id)
-    elif event_type in SUMMARIZED_EVENTS:
-        logger.info("firefly_summary_ack", extra={"firefly_meeting_id": firefly_meeting_id})
     else:
         logger.warning("firefly_unknown_event", extra={"event_type": event_type})
 
