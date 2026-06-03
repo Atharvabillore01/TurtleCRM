@@ -89,9 +89,9 @@ Onboarding a new internal user = `INSERT INTO team_users (...)` first, then the 
 ### Token lifecycle
 
 - **Access token** (15 min): JWT, stored in JS memory only (never localStorage). Validated by signature alone — no Redis lookup on every request.
-- **Refresh token** (7 days): JWT stored in Redis at `refresh:{userId}:{tokenId}`. Sent as httpOnly cookie. Rotated on every use (old key deleted, new pair issued).
+- **Refresh token** (7 days): JWT stored in Redis at `refresh:{userId}:{tokenId}`, sent as httpOnly cookie. Treated as a **stable, revocable server-side session** — `/auth/refresh` validates it against Redis and mints a new access token **without rotating or deleting** it (single-use rotation caused concurrent-refresh races that logged browser sessions out). Revoked by deleting the Redis key (logout / admin); the key's TTL slides on activity. Session ends at refresh-token expiry or revocation.
 - Silent refresh: AuthContext schedules a `setTimeout` 30s before access token expiry.
-- On 401: axios interceptor calls `/auth/refresh`, queues concurrent requests, retries all after new token issued.
+- On 401: axios interceptor calls `/auth/refresh`; concurrent refresh calls are **deduplicated** (one in-flight request shared) so they can't race.
 
 ### Event bus — pluggable adapter layer
 

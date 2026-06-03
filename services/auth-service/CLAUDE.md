@@ -12,7 +12,7 @@ JWT issuer and auth orchestrator. Does NOT generate OTPs itself — publishes `a
 - `routes/client.py` — `POST /auth/client/request-otp`, `POST /auth/client/verify-otp`
 - `routes/advisor.py` — `POST /auth/advisor/login`, `POST /auth/advisor/verify-otp`
 - `routes/oauth.py` — Google OAuth: `GET /auth/oauth/google` → `/auth/oauth/google/callback`; internal flow: `GET /auth/oauth/internal/google` → `/auth/oauth/internal/google/callback`
-- `routes/refresh.py` — `POST /auth/refresh` (rotates refresh token)
+- `routes/refresh.py` — `POST /auth/refresh` (mints a new access token for the existing session; non-rotating)
 - `db/team_procs.py` — `_fn_is_internal_user_allowed` (admission gate) + `proc_create_team_user_via_oauth` wrapper
 - `eventbus.py` — process-level RabbitMQ singleton, `publish_event(topic, payload)`
 - `jwt_utils.py` — issue / verify access and refresh tokens
@@ -26,7 +26,7 @@ JWT issuer and auth orchestrator. Does NOT generate OTPs itself — publishes `a
 - Refresh token: 7 days, httpOnly cookie at path `/auth` only — not readable by JS
 - Advisor login is 2-step: password check → stores `advisor:session:{sessionId}` in Redis → publishes `auth.otp.requested`
 - On verify: checks Redis session + calls otp-service `/otp/verify` → if both pass, issues JWT pair and deletes session key
-- Token rotation: refresh endpoint deletes `refresh:{userId}:{tokenId}` and writes new key atomically
+- Session model (non-rotating): the refresh token is a stable, revocable server-side session. `/auth/refresh` validates it against `refresh:{userId}:{tokenId}` in Redis, slides that key's TTL, and mints a NEW access token bound to the same `sessionId` — it does NOT delete or re-issue the refresh token. (Single-use rotation was replaced because concurrent browser refreshes raced and logged sessions out.) Revoke by deleting the Redis key.
 - OAuth callback issues tokens via the same JWT structure as password flow
 
 ### Internal-team admission gate (2026-05-29 — current)

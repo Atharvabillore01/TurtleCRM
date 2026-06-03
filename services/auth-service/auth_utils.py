@@ -5,7 +5,7 @@ from fastapi import Response
 
 from config import settings
 from redis_client import get_redis
-from jwt_utils import sign_access_token, sign_refresh_token, refresh_token_key, refresh_token_ttl, REFRESH_TTL
+from jwt_utils import sign_access_token, sign_refresh_token, refresh_token_key, refresh_token_ttl, REFRESH_TTL, ACCESS_TTL
 
 
 def mask(dest: str) -> str:
@@ -63,16 +63,22 @@ async def issue_tokens(user_id: str, user_type: str, role: str) -> tuple[str, st
     return access_token, refresh_token, session_id
 
 
-def set_token_cookies(response: Response, access_token: str, refresh_token: str) -> None:
-    secure = settings.node_env == "production"
+def set_access_cookie(response: Response, access_token: str) -> None:
+    """Set ONLY the short-lived access-token cookie. Used by /auth/refresh,
+    which mints a new access token for an existing session without touching
+    the (stable) refresh-token cookie."""
     response.set_cookie(
         "access_token", access_token,
         httponly=True, samesite="lax", path="/",
-        max_age=15 * 60, secure=secure,
+        max_age=ACCESS_TTL, secure=settings.node_env == "production",
     )
+
+
+def set_token_cookies(response: Response, access_token: str, refresh_token: str) -> None:
+    set_access_cookie(response, access_token)
     # path="/auth" — refresh token is only sent to /auth/* endpoints
     response.set_cookie(
         "refresh_token", refresh_token,
         httponly=True, samesite="lax", path="/auth",
-        max_age=REFRESH_TTL, secure=secure,
+        max_age=REFRESH_TTL, secure=settings.node_env == "production",
     )
