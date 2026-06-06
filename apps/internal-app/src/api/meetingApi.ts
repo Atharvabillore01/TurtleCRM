@@ -299,10 +299,18 @@ export async function ingestMeeting(
   fireflies_url: string,
   idempotency_key: string,
   agents_to_use: string[] = [],
+  model?: string,
+  provider?: string,
 ): Promise<IngestResult> {
   const res = await meetingAxios.post<IngestResult>(
     "/api/meetings/ingest",
-    { fireflies_url, idempotency_key, agents_to_use },
+    {
+      fireflies_url,
+      idempotency_key,
+      agents_to_use,
+      model: model || null,
+      provider: provider || null,
+    },
   );
   return res.data;
 }

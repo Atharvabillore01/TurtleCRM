@@ -47,6 +47,10 @@ async def _handle_transcribed(payload: dict) -> None:
     agenda             = payload.get("agenda", "")
     agents_to_use_raw  = payload.get("agents_to_use", [])
     transcript_text    = payload.get("transcript_text", "")
+    # Optional LLM overrides (empty = CRM-AI service defaults). Read before
+    # `payload` is reassigned to the request body below.
+    model              = (payload.get("model") or "").strip()
+    provider           = (payload.get("provider") or "").strip()
 
     # Explicit policy: empty / missing agents_to_use → run ALL agents.
     # The CRM-AI orchestrator already does this implicitly, but being
@@ -63,6 +67,8 @@ async def _handle_transcribed(payload: dict) -> None:
         "meeting_id": meeting_id,
         "agents_to_use": agents_to_use,
         "agents_defaulted": agents_to_use is ALL_EXTRACTION_AGENTS,
+        "model": model or "(default)",
+        "provider": provider or "(default)",
         "transcript_chars": len(transcript_text),
     })
 
@@ -87,6 +93,11 @@ async def _handle_transcribed(payload: dict) -> None:
             "agents_to_use": agents_to_use,
         },
     }
+    # Forward LLM overrides only when set; otherwise let CRM-AI use its defaults.
+    if model:
+        payload["model"] = model
+    if provider:
+        payload["provider"] = provider
     extract_url = settings.crm_ai_service_url + "/extract"
     extraction_data: dict | None = None
     last_error: str | None = None
