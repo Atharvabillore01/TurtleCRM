@@ -236,46 +236,69 @@ function TouchPointAccordion({
 }: any) {
   const filled = rows.filter((r: any) => !r.isNull).length;
   const total = rows.length;
+  const missing = total - filled;
   const allFilled = filled === total;
   const noneFilled = filled === 0;
+  const pct = Math.round((filled / Math.max(total, 1)) * 100);
 
   return (
-    <div className="rounded-xl border border-line overflow-hidden shadow-[0_1px_4px_rgba(0,0,0,0.04)]">
+    <div
+      className={`shrink-0 rounded-xl border overflow-hidden transition-shadow ${
+        isOpen ? "border-[rgba(46,222,190,0.5)] shadow-[0_4px_14px_rgba(46,222,190,0.10)]" : "border-line shadow-[0_1px_3px_rgba(0,0,0,0.04)]"
+      }`}
+    >
       {/* Section header */}
       <button
         type="button"
         onClick={onToggle}
-        className="flex items-center justify-between w-full px-4 py-[10px] bg-[#f7fdfb] hover:bg-[#eef9f6] transition-colors cursor-pointer border-b border-line"
+        className={`flex items-center justify-between w-full px-4 py-3 transition-colors cursor-pointer ${
+          isOpen ? "bg-[#eef9f6] border-b border-line" : "bg-[#f7fdfb] hover:bg-[#eef9f6]"
+        }`}
       >
-        <div className="flex items-center gap-2.5">
+        <div className="flex items-center gap-2.5 min-w-0">
           <span
             className={`w-2 h-2 rounded-full shrink-0 ${
               allFilled ? "bg-green" : noneFilled ? "bg-[#ddd]" : "bg-[#f5a623]"
             }`}
           />
-          <span className="text-sm font-black text-ink">{touchPoint}</span>
-          <span className="text-xs text-muted font-normal">
-            {filled}/{total} filled
-          </span>
+          <span className="text-sm font-black text-ink truncate">{touchPoint}</span>
+          {missing > 0 ? (
+            <span className="inline-flex items-center min-h-[18px] px-2 rounded-full bg-[#fff1ee] text-red text-[10px] font-black border border-[rgba(202,78,78,0.22)] shrink-0">
+              {missing} missing
+            </span>
+          ) : (
+            <span className="inline-flex items-center min-h-[18px] px-2 rounded-full bg-[#d8fff6] text-[#0f6e5d] text-[10px] font-black border border-[rgba(46,222,190,0.3)] shrink-0">
+              complete
+            </span>
+          )}
         </div>
-        <HugeiconsIcon
-          icon={isOpen ? ArrowUp01Icon : ArrowDown01Icon}
-          size={14}
-          strokeWidth={2.5}
-          className="text-muted shrink-0"
-        />
+        <div className="flex items-center gap-3 shrink-0">
+          <span className="text-xs text-muted font-bold tabular-nums">{filled}/{total}</span>
+          <div className="w-16 h-1.5 rounded-full bg-[#e8f5f0] overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${allFilled ? "bg-green" : "bg-[#f5a623]"}`}
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+          <HugeiconsIcon
+            icon={isOpen ? ArrowUp01Icon : ArrowDown01Icon}
+            size={14}
+            strokeWidth={2.5}
+            className="text-muted"
+          />
+        </div>
       </button>
 
       {/* Column headers & Rows — only when open */}
       {isOpen && (
-        <div className="max-h-[50vh] overflow-y-auto relative">
-          <div className="grid grid-cols-[1fr_1fr_auto] gap-3 px-4 py-1.5 bg-[#fafafa] border-b border-[rgba(215,239,234,0.5)] sticky top-0 z-10">
+        <div>
+          <div className="grid grid-cols-[1fr_1fr_auto] gap-3 px-4 py-1.5 bg-[#fafafa] border-b border-[rgba(215,239,234,0.5)]">
             <span className="text-[10px] font-black text-muted uppercase tracking-wide">Attribute</span>
             <span className="text-[10px] font-black text-muted uppercase tracking-wide">AI Value</span>
             <span className="text-[10px] font-black text-muted uppercase tracking-wide">Actions</span>
           </div>
 
-          <div className="flex flex-col pb-9">
+          <div className="flex flex-col">
             {rows.map((row: any) => (
               <AttributeRow
                 key={row.attribute.id}
@@ -292,6 +315,88 @@ function TouchPointAccordion({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Missing-parameters view ──────────────────────────────────────────────────
+// Focused screen listing every attribute the AI could not fill, grouped by
+// touch point, so a reviewer can see the gaps at a glance and fill them inline.
+function MissingPanel({
+  groups,
+  totalCount,
+  filledCount,
+  draftValues,
+  editingKey,
+  setEditingKey,
+  setDraftValues,
+  onSave,
+  onApprove,
+  onReject,
+}: any) {
+  const missingTotal = groups.reduce((n: number, g: any) => n + g.rows.length, 0);
+
+  // Everything filled → celebratory empty state.
+  if (missingTotal === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full gap-3 text-center px-6">
+        <div className="grid place-items-center w-16 h-16 rounded-full bg-[#d8fff6] text-[#0f6e5d]">
+          <HugeiconsIcon icon={CheckmarkCircle02Icon} size={32} strokeWidth={2} />
+        </div>
+        <h3 className="m-0 text-lg font-black text-ink">Nothing left to fill</h3>
+        <p className="m-0 text-sm text-muted max-w-[360px]">
+          All {totalCount} parameters were extracted. There are no missing fields for this meeting.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-4">
+      {/* Summary banner */}
+      <div className="shrink-0 flex items-center justify-between gap-4 px-4 py-3 rounded-xl border border-[rgba(202,78,78,0.25)] bg-[#fff7f6]">
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="grid place-items-center w-9 h-9 rounded-full bg-[#ffe8e5] text-red text-base font-black shrink-0">
+            {missingTotal}
+          </span>
+          <div className="min-w-0">
+            <p className="m-0 text-sm font-black text-ink">Missing parameters</p>
+            <p className="m-0 text-xs text-muted">
+              {filledCount} of {totalCount} filled · {missingTotal} still need a value
+            </p>
+          </div>
+        </div>
+        <span className="text-xs font-black text-red whitespace-nowrap">
+          {Math.round((missingTotal / Math.max(totalCount, 1)) * 100)}% empty
+        </span>
+      </div>
+
+      {/* Grouped missing rows */}
+      {groups.map((g: any) => (
+        <div key={g.touchPoint} className="shrink-0 rounded-xl border border-line overflow-hidden shadow-[0_1px_3px_rgba(0,0,0,0.04)]">
+          <div className="flex items-center justify-between px-4 py-2.5 bg-[#fffafa] border-b border-[rgba(215,239,234,0.6)]">
+            <span className="text-sm font-black text-ink">{g.touchPoint}</span>
+            <span className="inline-flex items-center min-h-[18px] px-2 rounded-full bg-[#fff1ee] text-red text-[10px] font-black border border-[rgba(202,78,78,0.22)]">
+              {g.rows.length} missing
+            </span>
+          </div>
+          <div className="flex flex-col">
+            {g.rows.map((row: any) => (
+              <AttributeRow
+                key={row.attribute.id}
+                row={row}
+                draftValues={draftValues}
+                editingKey={editingKey}
+                setEditingKey={setEditingKey}
+                setDraftValues={setDraftValues}
+                onSave={onSave}
+                onApprove={onApprove}
+                onReject={onReject}
+              />
+            ))}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -350,7 +455,7 @@ function AiTasksPanel({ meetingTasks, teamMembers, onTaskApprove, onTaskDecline,
   const { suggestions = [], active = [], rejected = [] } = meetingTasks || {};
 
   return (
-    <div className="flex flex-col gap-4 p-4 overflow-y-auto h-full">
+    <div className="flex flex-col gap-4 p-4 overflow-y-auto overscroll-contain h-full">
       {/* Manual create */}
       <div className="flex items-center justify-between">
         <h3 className="m-0">AI Tasks <span className="text-muted font-normal text-sm">for this meeting</span></h3>
@@ -505,17 +610,36 @@ export default function ReviewModal({
 
   const presentTouchPoints = TOUCH_POINTS.filter((tp) => grouped[tp]?.length > 0);
   const sidebarItems = ["All", ...presentTouchPoints];
+  const isMissingView = activeTouchPoint === "Missing";
   const displayedTouchPoints =
-    activeTouchPoint === "All" ? presentTouchPoints : [activeTouchPoint];
+    activeTouchPoint === "All" || isMissingView ? presentTouchPoints : [activeTouchPoint];
   const firstTouchPoint = presentTouchPoints[0] ?? null;
+
+  // Missing-only groups: each present touch point reduced to its null rows,
+  // in canonical touch-point order. Powers the "Missing" focus screen.
+  const missingGroups = presentTouchPoints
+    .map((tp) => ({ touchPoint: tp, rows: (grouped[tp] || []).filter((r: any) => r.isNull) }))
+    .filter((g) => g.rows.length > 0);
+  const missingTotal = rows.filter((r: any) => r.isNull).length;
 
   // Auto-expand: the selected section, or the first present one in "All" view
   // (so the panel never opens fully collapsed). Manual toggles still work.
   React.useEffect(() => {
+    if (isMissingView) return; // Missing view manages its own layout
     setExpandedAccordion(activeTouchPoint !== "All" ? activeTouchPoint : firstTouchPoint);
-  }, [activeTouchPoint, firstTouchPoint]);
+  }, [activeTouchPoint, firstTouchPoint, isMissingView]);
 
   const fillPct = Math.round((filledCount / Math.max(rows.length, 1)) * 100);
+
+  // Lock the page behind the modal so scrolling inside it never scrolls the
+  // background. Restored on unmount (the modal only mounts while open).
+  React.useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
 
   return (
     <div
@@ -555,6 +679,21 @@ export default function ReviewModal({
             </div>
           </div>
           <div className="flex items-center gap-4 shrink-0">
+            {activeTab === "attributes" && missingTotal > 0 && (
+              <button
+                type="button"
+                onClick={() => setActiveTouchPoint("Missing")}
+                className={`inline-flex items-center gap-1.5 min-h-[28px] px-3 rounded-full border text-xs font-black transition-colors cursor-pointer ${
+                  isMissingView
+                    ? "bg-red text-white border-red"
+                    : "bg-[#fff7f6] text-red border-[rgba(202,78,78,0.3)] hover:bg-[#ffeeec]"
+                }`}
+                title="Show only parameters that are not filled"
+              >
+                <span className={`w-1.5 h-1.5 rounded-full ${isMissingView ? "bg-white" : "bg-red"}`} />
+                {missingTotal} missing
+              </button>
+            )}
             <div className="flex items-center gap-2">
               <div className="w-[140px] h-[6px] rounded-full bg-[#e8f5f0] overflow-hidden">
                 <div
@@ -579,7 +718,29 @@ export default function ReviewModal({
           {activeTab === "attributes" ? (
             <>
               {/* Touch point sidebar */}
-              <aside className="w-[210px] shrink-0 border-r border-line bg-[#f9fdfb] overflow-y-auto py-3 px-2">
+              <aside className="w-[210px] shrink-0 border-r border-line bg-[#f9fdfb] overflow-y-auto overscroll-contain py-3 px-2">
+                {/* Missing-parameters shortcut */}
+                <button
+                  type="button"
+                  onClick={() => setActiveTouchPoint("Missing")}
+                  className={`flex items-center justify-between w-full px-3 py-[9px] rounded-lg mb-2 text-left transition-colors duration-100 cursor-pointer border ${
+                    isMissingView
+                      ? "bg-[#fff1ee] border-[rgba(202,78,78,0.35)] text-red"
+                      : missingTotal > 0
+                      ? "bg-[#fff7f6] border-[rgba(202,78,78,0.18)] text-red hover:bg-[#ffeeec]"
+                      : "bg-[#f3fbf8] border-[rgba(46,222,190,0.25)] text-[#0f6e5d] hover:bg-[#eef9f6]"
+                  }`}
+                >
+                  <span className="text-xs font-black truncate">
+                    {missingTotal > 0 ? "Missing parameters" : "All filled"}
+                  </span>
+                  {missingTotal > 0 && (
+                    <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-red text-white text-[10px] font-black shrink-0 ml-1">
+                      {missingTotal}
+                    </span>
+                  )}
+                </button>
+
                 <p className="px-2 mb-2 text-[9px] font-black text-muted uppercase tracking-[0.12em]">Touch Points</p>
                 {sidebarItems.map((tp) => {
                   const isActive = activeTouchPoint === tp;
@@ -597,8 +758,21 @@ export default function ReviewModal({
                 })}
               </aside>
               {/* Attribute content */}
-              <main className="flex-1 min-w-0 overflow-y-auto p-4 flex flex-col gap-4">
-                {displayedTouchPoints.length === 0 ? (
+              <main className="flex-1 min-w-0 overflow-y-auto overscroll-contain p-4 space-y-3">
+                {isMissingView ? (
+                  <MissingPanel
+                    groups={missingGroups}
+                    totalCount={rows.length}
+                    filledCount={filledCount}
+                    draftValues={draftValues}
+                    editingKey={editingKey}
+                    setEditingKey={setEditingKey}
+                    setDraftValues={setDraftValues}
+                    onSave={onSave}
+                    onApprove={onApprove}
+                    onReject={onReject}
+                  />
+                ) : displayedTouchPoints.length === 0 ? (
                   <div className="flex items-center justify-center h-40 text-muted text-sm">No attributes in this touch point.</div>
                 ) : (
                   displayedTouchPoints.map((tp) => (
@@ -613,7 +787,7 @@ export default function ReviewModal({
               </main>
             </>
           ) : (
-            <div className="flex-1 min-w-0 overflow-y-auto">
+            <div className="flex-1 min-w-0 overflow-y-auto overscroll-contain">
               <AiTasksPanel
                 meetingTasks={meetingTasks}
                 teamMembers={teamMembers || []}
