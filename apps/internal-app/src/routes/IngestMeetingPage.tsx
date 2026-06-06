@@ -18,6 +18,22 @@ const POLL_TIMEOUT_MS  = 10 * 60_000;  // give up after 10 min (covers 2hr meeti
 const PREVIEW_CONCURRENCY = 4;
 const INGEST_CONCURRENCY  = 3;
 
+// Static provider/model options. Only providers whose API key is configured on
+// the CRM-AI service are listed (anthropic + openai). Empty selection = let the
+// CRM-AI service use its env defaults.
+const LLM_PROVIDERS: { id: string; label: string; models: string[] }[] = [
+  {
+    id: "anthropic",
+    label: "Anthropic (Claude)",
+    models: ["claude-opus-4-8", "claude-sonnet-4-6", "claude-opus-4-7", "claude-haiku-4-5-20251001"],
+  },
+  {
+    id: "openai",
+    label: "OpenAI",
+    models: ["gpt-5.4", "gpt-4.1", "gpt-4o"],
+  },
+];
+
 type RowStatus =
   | "previewing"
   | "preview_error"
@@ -195,7 +211,11 @@ export default function IngestMeetingPage() {
   const [inputs, setInputs] = useState<{ uid: string; value: string }[]>([{ uid: nextUid(), value: "" }]);
   const [rows, setRows] = useState<Row[]>([]);
   const [agents, setAgents] = useState<string[]>([]); // shared selection — applied to every ingested meeting
+  const [provider, setProvider] = useState<string>(""); // "" = CRM-AI service default
+  const [model, setModel] = useState<string>("");       // "" = provider/server default
   const [agentOptions, setAgentOptions] = useState<AgentOption[]>([]);
+
+  const providerModels = LLM_PROVIDERS.find((p) => p.id === provider)?.models ?? [];
   const [previewingAll, setPreviewingAll] = useState(false);
   const [ingestingAll, setIngestingAll] = useState(false);
 
@@ -331,7 +351,7 @@ export default function IngestMeetingPage() {
         async (row) => {
           updateRow(row.uid, { status: "ingesting", ingestError: undefined });
           try {
-            const result = await ingestMeeting(row.input, newIdempotencyKey(), agents);
+            const result = await ingestMeeting(row.input, newIdempotencyKey(), agents, model, provider);
             updateRow(row.uid, {
               status: "extracting",
               result,
@@ -625,7 +645,34 @@ export default function IngestMeetingPage() {
 
           {/* ── Action bar ── */}
           <div className="sticky bottom-0 mt-3 flex items-center justify-between gap-3 px-4 py-3 border border-line rounded-2xl bg-white/95 backdrop-blur shadow-card">
-            <div className="flex items-center gap-2 min-w-0">
+            <div className="flex flex-wrap items-center gap-2 min-w-0">
+              {/* Provider */}
+              <select
+                value={provider}
+                disabled={ingestingAll || counts.busy > 0}
+                onChange={(e) => { setProvider(e.target.value); setModel(""); }}
+                className="form-field min-h-[30px] px-2 border border-line rounded-lg bg-white text-xs font-extrabold text-ink disabled:opacity-50"
+                title="LLM provider for extraction (default = server config)"
+              >
+                <option value="">Default provider</option>
+                {LLM_PROVIDERS.map((p) => (
+                  <option key={p.id} value={p.id}>{p.label}</option>
+                ))}
+              </select>
+              {/* Model — only meaningful once a provider is chosen */}
+              <select
+                value={model}
+                disabled={ingestingAll || counts.busy > 0 || !provider}
+                onChange={(e) => setModel(e.target.value)}
+                className="form-field min-h-[30px] px-2 border border-line rounded-lg bg-white text-xs font-extrabold text-ink disabled:opacity-50"
+                title={provider ? "Model for the selected provider" : "Pick a provider first"}
+              >
+                <option value="">{provider ? "Default model" : "—"}</option>
+                {providerModels.map((m) => (
+                  <option key={m} value={m}>{m}</option>
+                ))}
+              </select>
+              {/* Agents */}
               <span className="text-xs text-muted whitespace-nowrap">
                 {mode === "single" ? "Agents:" : "Agents (all):"}
               </span>
@@ -636,7 +683,7 @@ export default function IngestMeetingPage() {
                 disabled={ingestingAll || counts.busy > 0}
                 dropUp
               />
-              <span className="hidden md:inline text-xs text-muted whitespace-nowrap ml-2">
+              <span className="hidden lg:inline text-xs text-muted whitespace-nowrap ml-1">
                 {counts.ready} ready · {counts.busy} processing · {counts.done} done
               </span>
             </div>

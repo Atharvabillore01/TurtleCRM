@@ -68,6 +68,10 @@ class IngestRequest(BaseModel):
     # Ops-selected agents to run on this meeting's transcript. Empty = run all.
     # Unknown names are dropped server-side (see ingest_meeting).
     agents_to_use: list[str] = []
+    # Optional LLM overrides for the CRM-AI extraction. Empty = service defaults.
+    # The CRM-AI service validates provider and that its API key is configured.
+    model: str | None = None
+    provider: str | None = None
 
 
 # Google Meet codes are 10 lowercase letters + 2 hyphens, e.g. "rco-jucv-rwm".
@@ -430,6 +434,8 @@ async def ingest_meeting(
             "client_id":          str(result.get("client_id") or ""),
             "agenda":             "",
             "agents_to_use":      requested_agents,
+            "model":              req.model or "",
+            "provider":           req.provider or "",
             "timestamp":          datetime.now(timezone.utc).isoformat(),
             "source":             "manual_ingest",
         })
