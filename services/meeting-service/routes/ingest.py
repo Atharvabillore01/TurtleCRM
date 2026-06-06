@@ -36,6 +36,11 @@ from db.pool import get_pool
 from eventbus import publish_event
 from firefly_client import FireflyClient
 from logger import get_logger
+from routes.meetings import AVAILABLE_AGENTS
+
+# Canonical agent names ops may assign per meeting. Single source of truth is
+# AVAILABLE_AGENTS in routes/meetings.py (kept in sync with the CRM-agent).
+_VALID_AGENT_NAMES = {a["name"] for a in AVAILABLE_AGENTS}
 
 router = APIRouter(prefix="/api/meetings/ingest", tags=["ingest"])
 logger = get_logger("meeting-service")
@@ -60,6 +65,9 @@ class IngestPreviewRequest(BaseModel):
 class IngestRequest(BaseModel):
     fireflies_url: str
     idempotency_key: str | None = None
+    # Ops-selected agents to run on this meeting's transcript. Empty = run all.
+    # Unknown names are dropped server-side (see ingest_meeting).
+    agents_to_use: list[str] = []
 
 
 # Google Meet codes are 10 lowercase letters + 2 hyphens, e.g. "rco-jucv-rwm".
@@ -315,9 +323,14 @@ async def ingest_meeting(
     """Atomic ingest. Re-fetches Fireflies, classifies, calls the SP,
     then publishes the meeting.transcribed event for the extraction worker
     (same topic + payload shape as the live Fireflies webhook)."""
+    # Keep only agents we recognise; empty list → worker runs ALL agents.
+    requested_agents = [a for a in (req.agents_to_use or []) if a in _VALID_AGENT_NAMES]
+
     logger.info("ingest_requested", extra={
         "input": req.fireflies_url, "requested_by": str(team_user_id),
         "has_idempotency_key": bool(req.idempotency_key),
+        "agents_to_use": requested_agents,
+        "agents_dropped": [a for a in (req.agents_to_use or []) if a not in _VALID_AGENT_NAMES],
     })
 
     client = FireflyClient(settings.firefly_api_key)
@@ -416,7 +429,7 @@ async def ingest_meeting(
             "meeting_id":         str(meeting_id),
             "client_id":          str(result.get("client_id") or ""),
             "agenda":             "",
-            "agents_to_use":      [],
+            "agents_to_use":      requested_agents,
             "timestamp":          datetime.now(timezone.utc).isoformat(),
             "source":             "manual_ingest",
         })

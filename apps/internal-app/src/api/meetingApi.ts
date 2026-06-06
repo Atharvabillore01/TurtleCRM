@@ -298,10 +298,11 @@ export async function previewIngest(fireflies_url: string): Promise<IngestPrevie
 export async function ingestMeeting(
   fireflies_url: string,
   idempotency_key: string,
+  agents_to_use: string[] = [],
 ): Promise<IngestResult> {
   const res = await meetingAxios.post<IngestResult>(
     "/api/meetings/ingest",
-    { fireflies_url, idempotency_key },
+    { fireflies_url, idempotency_key, agents_to_use },
   );
   return res.data;
 }
