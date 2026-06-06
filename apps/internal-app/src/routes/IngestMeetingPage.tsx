@@ -1,432 +1,670 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
 import {
   previewIngest,
   ingestMeeting,
   newIdempotencyKey,
+  fetchAvailableAgents,
   IngestPreview,
   IngestResult,
+  AgentOption,
   fetchExtractionForMeeting,
 } from "../api/meetingApi";
 import { showApiError } from "../utils/showApiError";
-import ConfirmDialog from "../components/shared/ConfirmDialog";
 
-const POLL_INTERVAL_MS = 5_000;     // check every 5 seconds
+const POLL_INTERVAL_MS = 5_000;        // check every 5 seconds
 const POLL_TIMEOUT_MS  = 10 * 60_000;  // give up after 10 min (covers 2hr meetings)
+const PREVIEW_CONCURRENCY = 4;
+const INGEST_CONCURRENCY  = 3;
+
+type RowStatus =
+  | "previewing"
+  | "preview_error"
+  | "ready"
+  | "ingesting"
+  | "extracting"
+  | "done"
+  | "failed";
+
+interface Row {
+  uid: string;
+  input: string;
+  status: RowStatus;
+  preview: IngestPreview | null;
+  previewError?: string;
+  result?: IngestResult;
+  ingestError?: string;
+  meetingId?: string;
+  startedAt?: number;
+}
+
+let _uidSeq = 0;
+const nextUid = () => `row_${++_uidSeq}`;
+
+/** Run an async worker over items with a bounded concurrency. */
+async function runPool<T>(items: T[], worker: (item: T) => Promise<void>, concurrency: number) {
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (cursor < items.length) {
+      const item = items[cursor++];
+      if (item !== undefined) await worker(item);
+    }
+  });
+  await Promise.all(runners);
+}
+
+function canIngestRow(r: Row): boolean {
+  const p = r.preview;
+  return (
+    !!p &&
+    !p.would_skip_reason &&
+    p.transcript_ready &&
+    !!p.advisor_match &&
+    !!p.client
+  );
+}
+
+// ─── Agent multi-select ───────────────────────────────────────────────────────
+function AgentMultiSelect({
+  options,
+  selected,
+  onChange,
+  disabled,
+  dropUp,
+}: {
+  options: AgentOption[];
+  selected: string[];
+  onChange: (next: string[]) => void;
+  disabled?: boolean;
+  dropUp?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const toggle = (name: string) => {
+    onChange(selected.includes(name) ? selected.filter((n) => n !== name) : [...selected, name]);
+  };
+
+  const label =
+    selected.length === 0
+      ? "All agents"
+      : selected.length === 1
+      ? selected[0]
+      : `${selected.length} agents`;
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((v) => !v)}
+        className="inline-flex items-center gap-1.5 min-h-[30px] px-3 border border-line rounded-lg bg-white text-xs font-extrabold text-ink hover:bg-surface-soft disabled:opacity-50 disabled:cursor-not-allowed"
+        title="Choose which extraction agents run on this meeting"
+      >
+        <span className={selected.length === 0 ? "text-muted" : "text-ink"}>{label}</span>
+        <span className="text-muted">▾</span>
+      </button>
+
+      {open && (
+        <div className={`absolute right-0 z-20 w-[260px] max-h-[300px] overflow-y-auto overscroll-contain border border-line rounded-xl bg-white shadow-modal p-1.5 ${dropUp ? "bottom-full mb-1" : "top-full mt-1"}`}>
+          <button
+            type="button"
+            onClick={() => onChange([])}
+            className={`flex items-center justify-between w-full px-2.5 py-2 rounded-lg text-left text-xs font-black ${
+              selected.length === 0 ? "bg-[rgba(46,222,190,0.14)] text-ink" : "text-muted hover:bg-surface-soft"
+            }`}
+          >
+            All agents (run everything)
+            {selected.length === 0 && <span className="text-green">✓</span>}
+          </button>
+          <div className="my-1 border-t border-line" />
+          {options.map((a) => {
+            const on = selected.includes(a.name);
+            return (
+              <button
+                key={a.name}
+                type="button"
+                onClick={() => toggle(a.name)}
+                className={`flex items-center justify-between gap-2 w-full px-2.5 py-2 rounded-lg text-left ${
+                  on ? "bg-[rgba(46,222,190,0.10)]" : "hover:bg-surface-soft"
+                }`}
+              >
+                <span className="min-w-0">
+                  <span className="block text-xs font-extrabold text-ink truncate">{a.touch_point}</span>
+                  <span className="block text-[10px] text-muted truncate">{a.name}</span>
+                </span>
+                <span
+                  className={`grid place-items-center w-4 h-4 rounded border shrink-0 ${
+                    on ? "bg-green border-green text-ink" : "border-line text-transparent"
+                  }`}
+                >
+                  ✓
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Per-row status badge ─────────────────────────────────────────────────────
+function StatusBadge({ row }: { row: Row }) {
+  const map: Record<RowStatus, { text: string; cls: string }> = {
+    previewing:    { text: "Fetching…",    cls: "bg-[#fff8e6] text-[#7a5a14]" },
+    preview_error: { text: "Fetch failed", cls: "bg-[rgba(202,78,78,0.08)] text-red" },
+    ready:         { text: "Ready",        cls: "bg-[#d8fff6] text-[#0f6e5d]" },
+    ingesting:     { text: "Ingesting…",   cls: "bg-[#fff8e6] text-[#7a5a14]" },
+    extracting:    { text: "Extracting…",  cls: "bg-[#fff8e6] text-[#7a5a14]" },
+    done:          { text: "Done ✓",       cls: "bg-[#d8fff6] text-[#0f6e5d]" },
+    failed:        { text: "Failed",       cls: "bg-[rgba(202,78,78,0.08)] text-red" },
+  };
+  const s = map[row.status];
+  return (
+    <span className={`inline-flex items-center min-h-[22px] px-2.5 rounded-full text-[10px] font-black uppercase tracking-wide ${s.cls}`}>
+      {s.text}
+    </span>
+  );
+}
 
 /**
- * Manual Fireflies ingest page.
+ * Manual Fireflies ingest — batch capable.
  *
- * Two-step UX:
- *   1. Paste URL → /ingest/preview → render attendee + match diagnostics
- *   2. Confirm    → /ingest         → create meeting + transcript +
- *                                     trigger extraction pipeline
- *
- * Frontend re-uses one idempotency_key per Confirm click so retries are safe.
+ *   1. Paste one code/URL per line (and/or add lines) → "Fetch all" runs
+ *      /ingest/preview for each, producing a row with attendee diagnostics.
+ *   2. Per row, pick which extraction agents to run (default: all).
+ *   3. "Ingest all" runs /ingest for every ingestable row (bounded
+ *      concurrency), each carrying its own agents_to_use, then polls each
+ *      meeting's extraction independently.
  */
 export default function IngestMeetingPage() {
   const navigate = useNavigate();
 
-  const [url, setUrl] = useState("");
-  const [preview, setPreview] = useState<IngestPreview | null>(null);
-  const [previewing, setPreviewing] = useState(false);
-  const [ingesting, setIngesting] = useState(false);
-  const [confirmReingest, setConfirmReingest] = useState(false);
+  const [mode, setMode] = useState<"single" | "multiple">("single");
+  const [inputs, setInputs] = useState<{ uid: string; value: string }[]>([{ uid: nextUid(), value: "" }]);
+  const [rows, setRows] = useState<Row[]>([]);
+  const [agents, setAgents] = useState<string[]>([]); // shared selection — applied to every ingested meeting
+  const [agentOptions, setAgentOptions] = useState<AgentOption[]>([]);
+  const [previewingAll, setPreviewingAll] = useState(false);
+  const [ingestingAll, setIngestingAll] = useState(false);
 
-  // Post-ingest state — drives the "Extraction running..." card
-  const [processing, setProcessing] = useState<{
-    result: IngestResult;
-    startedAt: number;
-    ready: boolean;
-  } | null>(null);
-  const pollTimer = useRef<number | null>(null);
+  // Keep a ref to the latest rows so the single polling interval can read them.
+  const rowsRef = useRef<Row[]>(rows);
+  rowsRef.current = rows;
 
-  // Cleanup the polling timer if the user navigates away
+  // Focus management for the entry builder — focus a row right after it's added.
+  const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const [focusUid, setFocusUid] = useState<string | null>(null);
   useEffect(() => {
-    return () => {
-      if (pollTimer.current) window.clearInterval(pollTimer.current);
-    };
+    if (focusUid && inputRefs.current[focusUid]) {
+      inputRefs.current[focusUid]!.focus();
+      setFocusUid(null);
+    }
+  }, [focusUid, inputs]);
+
+  useEffect(() => {
+    fetchAvailableAgents()
+      .then(setAgentOptions)
+      .catch(() => {/* non-fatal: agent picker just shows empty */});
   }, []);
 
+  const updateRow = (uid: string, patch: Partial<Row>) =>
+    setRows((rs) => rs.map((r) => (r.uid === uid ? { ...r, ...patch } : r)));
 
-  // Tick once per second to update the "elapsed 12s" display while processing
-  const [, setNowTick] = useState(0);
-  useEffect(() => {
-    if (!processing || processing.ready) return;
-    const t = window.setInterval(() => setNowTick((n) => n + 1), 1000);
-    return () => window.clearInterval(t);
-  }, [processing]);
+  // Switch entry mode — resets the in-progress entry/fetched rows so the two
+  // flows never get tangled. Disabled in the UI while anything is processing.
+  const switchMode = (next: "single" | "multiple") => {
+    if (next === mode) return;
+    setMode(next);
+    setRows([]);
+    setInputs([{ uid: nextUid(), value: "" }]);
+  };
 
-  async function handlePreview(e: React.FormEvent) {
+  // ── Entry-builder helpers ──
+  const setInputValue = (uid: string, value: string) =>
+    setInputs((is) => is.map((i) => (i.uid === uid ? { ...i, value } : i)));
+
+  const addInput = (afterUid?: string) => {
+    const uid = nextUid();
+    setInputs((is) => {
+      if (!afterUid) return [...is, { uid, value: "" }];
+      const idx = is.findIndex((i) => i.uid === afterUid);
+      return [...is.slice(0, idx + 1), { uid, value: "" }, ...is.slice(idx + 1)];
+    });
+    setFocusUid(uid);
+  };
+
+  const removeInput = (uid: string) =>
+    setInputs((is) => {
+      const next = is.filter((i) => i.uid !== uid);
+      return next.length ? next : [{ uid: nextUid(), value: "" }];
+    });
+
+  // Smart paste: a multi-line / comma-separated blob explodes into rows.
+  // Single-meeting mode pastes normally (one meeting only).
+  const handlePaste = (uid: string, e: React.ClipboardEvent<HTMLInputElement>) => {
+    if (mode === "single") return;
+    const text = e.clipboardData.getData("text");
+    const tokens = text.split(/[\n,]+/).map((t) => t.trim()).filter(Boolean);
+    if (tokens.length <= 1) return; // single value → let the browser paste normally
     e.preventDefault();
-    setPreview(null);
-    if (!url.trim()) return;
-    setPreviewing(true);
-    try {
-      const result = await previewIngest(url.trim());
-      setPreview(result);
-    } catch (err) {
-      showApiError(err, "Could not fetch Fireflies meeting details.");
-    } finally {
-      setPreviewing(false);
-    }
-  }
+    setInputs((is) => {
+      const idx = is.findIndex((i) => i.uid === uid);
+      const exploded = tokens.map((t) => ({ uid: nextUid(), value: t }));
+      return [...is.slice(0, idx), ...exploded, ...is.slice(idx + 1)];
+    });
+  };
 
-  function handleIngestClick() {
-    if (!preview) return;
-    // Already-ingested meeting → confirm before re-running
-    if (preview.already_ingested_meeting_id) {
-      setConfirmReingest(true);
+  // ── Take the entry rows, create preview-pending Rows, then fetch them ──
+  async function handleFetchAll(e?: React.FormEvent) {
+    e?.preventDefault();
+    const existing = new Set(rows.map((r) => r.input.toLowerCase()));
+    const values = Array.from(
+      new Set(inputs.map((i) => i.value.trim()).filter(Boolean)),
+    ).filter((v) => !existing.has(v.toLowerCase()));
+
+    if (values.length === 0) {
+      if (inputs.some((i) => i.value.trim())) toast("Those meetings are already in the list.", { icon: "ℹ️" });
       return;
     }
-    void doIngest();
-  }
 
-  async function doIngest() {
-    if (!preview) return;
-    setIngesting(true);
-    setConfirmReingest(false);
+    const newRows: Row[] = values.map((input) => ({
+      uid: nextUid(),
+      input,
+      status: "previewing",
+      preview: null,
+    }));
+    setRows((rs) => [...rs, ...newRows]);
+    setInputs([{ uid: nextUid(), value: "" }]); // reset the entry builder
+
+    setPreviewingAll(true);
     try {
-      const result = await ingestMeeting(url.trim(), newIdempotencyKey());
-      toast.success(
-        result.was_replay
-          ? "Re-analysis triggered."
-          : result.was_new_client
-            ? `Ingested. New client ${result.client_name} created.`
-            : `Ingested meeting for ${result.client_name}.`,
+      await runPool(
+        newRows,
+        async (row) => {
+          try {
+            const preview = await previewIngest(row.input);
+            updateRow(row.uid, { preview, status: "ready" });
+          } catch (err: any) {
+            updateRow(row.uid, {
+              status: "preview_error",
+              previewError: err?.response?.data?.detail || "Could not fetch this meeting.",
+            });
+          }
+        },
+        PREVIEW_CONCURRENCY,
       );
-      // Switch to processing view + start polling for the extraction
-      const startedAt = Date.now();
-      setProcessing({ result, startedAt, ready: false });
-      startPolling(result, startedAt);
-    } catch (err) {
-      showApiError(err, "Failed to ingest meeting.");
     } finally {
-      setIngesting(false);
+      setPreviewingAll(false);
     }
   }
 
-  function startPolling(result: IngestResult, startedAtOverride?: number) {
-    if (pollTimer.current) window.clearInterval(pollTimer.current);
-    const meetingId = result.meeting_id;
-    const startedAt = startedAtOverride ?? Date.now();   // captured in closure
-
-    pollTimer.current = window.setInterval(async () => {
-      // Stop after timeout
-      const elapsed = Date.now() - startedAt;
-      if (elapsed > POLL_TIMEOUT_MS) {
-        if (pollTimer.current) window.clearInterval(pollTimer.current);
-        pollTimer.current = null;
-        toast(
-          "Extraction is taking longer than usual. You can refresh AI Validation later — we'll keep processing in the background.",
-          { icon: "⏱️", duration: 8_000 },
-        );
-        return;
-      }
-
-      try {
-        const extraction = await fetchExtractionForMeeting(meetingId);
-        if (extraction) {
-          if (pollTimer.current) window.clearInterval(pollTimer.current);
-          pollTimer.current = null;
-          setProcessing((p) => (p ? { ...p, ready: true } : p));
-          toast.success(
-            `Extraction ready for ${result.client_name} — ${extraction.total_fields} fields extracted.`,
-            { duration: 6_000 },
-          );
-        }
-      } catch {
-        // Swallow transient errors — keep polling
-      }
-    }, POLL_INTERVAL_MS);
+  function removeRow(uid: string) {
+    setRows((rs) => rs.filter((r) => r.uid !== uid));
   }
 
-  function resetForNewIngest() {
-    if (pollTimer.current) window.clearInterval(pollTimer.current);
-    pollTimer.current = null;
-    setProcessing(null);
-    setPreview(null);
-    setUrl("");
-  }
-
-  const canIngest =
-    !!preview &&
-    !preview.would_skip_reason &&
-    preview.transcript_ready &&
-    !!preview.advisor_match &&
-    !!preview.client;
-
-  // ── Post-ingest "Extraction running" view ──────────────────────────────
-  if (processing) {
-    const elapsedSec = Math.floor((Date.now() - processing.startedAt) / 1000);
-    return (
-      <div className="max-w-3xl mx-auto p-4">
-        <header className="mb-5">
-          <p className="text-green text-xs font-black uppercase font-montserrat m-0">
-            Ingest from Fireflies
-          </p>
-          <h1>
-            {processing.ready ? "Extraction complete" : "Extraction in progress…"}
-          </h1>
-        </header>
-
-        <div className="p-5 border border-line rounded-2xl bg-white shadow-card">
-          <div className="grid grid-cols-[48px_1fr] items-center gap-3 mb-3">
-            {processing.ready ? (
-              <span className="grid w-12 h-12 place-items-center rounded-full bg-[#d8fff6] text-2xl">
-                ✓
-              </span>
-            ) : (
-              <span className="grid w-12 h-12 place-items-center rounded-full bg-[#fff8e6] text-2xl animate-pulse">
-                ⏳
-              </span>
-            )}
-            <div>
-              <p className="m-0 text-sm font-extrabold text-ink">
-                {processing.result.client_name}
-              </p>
-              <p className="m-0 text-xs text-muted">
-                Advisor: {processing.result.advisor_name}
-                {processing.result.was_new_client && " · new client created"}
-              </p>
-            </div>
-          </div>
-
-          {!processing.ready ? (
-            <>
-              <p className="text-sm text-muted mb-3">
-                Meeting + transcript are saved. The 174-field extraction is
-                running in the background and typically completes in
-                30-90 seconds (longer for 1hr+ meetings).
-                We&apos;ll notify you as soon as it&apos;s ready — feel free to
-                continue working in another tab.
-              </p>
-              <div className="flex items-center gap-3 mb-4 text-xs text-muted">
-                <span className="inline-block w-2 h-2 rounded-full bg-green animate-pulse" />
-                Checking every 5s · elapsed {elapsedSec}s
-              </div>
-            </>
-          ) : (
-            <p className="text-sm text-ink mb-4">
-              The extraction is ready for review on the AI Validation page.
-            </p>
-          )}
-
-          <div className="flex items-center justify-end gap-2">
-            <button
-              type="button"
-              onClick={resetForNewIngest}
-              className="px-4 py-2 border border-line rounded-lg bg-white text-ink hover:bg-surface-soft"
-            >
-              Ingest another meeting
-            </button>
-            <button
-              type="button"
-              onClick={() => navigate("/dashboard/ai-validation")}
-              className="px-4 py-2 border border-[#138773] rounded-lg bg-[#138773] text-white font-extrabold hover:opacity-90"
-            >
-              {processing.ready ? "Open AI Validation" : "Open AI Validation anyway"}
-            </button>
-          </div>
-        </div>
-      </div>
+  // ── Ingest every ingestable row, all carrying the shared agents_to_use ──
+  async function handleIngestAll() {
+    const targets = rowsRef.current.filter(
+      (r) => (r.status === "ready" || r.status === "failed") && canIngestRow(r),
     );
+    if (targets.length === 0) {
+      toast("No meetings are ready to ingest.", { icon: "ℹ️" });
+      return;
+    }
+
+    setIngestingAll(true);
+    try {
+      await runPool(
+        targets,
+        async (row) => {
+          updateRow(row.uid, { status: "ingesting", ingestError: undefined });
+          try {
+            const result = await ingestMeeting(row.input, newIdempotencyKey(), agents);
+            updateRow(row.uid, {
+              status: "extracting",
+              result,
+              meetingId: result.meeting_id,
+              startedAt: Date.now(),
+            });
+          } catch (err: any) {
+            updateRow(row.uid, {
+              status: "failed",
+              ingestError: err?.response?.data?.detail || "Ingest failed.",
+            });
+          }
+        },
+        INGEST_CONCURRENCY,
+      );
+    } finally {
+      setIngestingAll(false);
+    }
   }
+
+  // ── One interval polls every row in the "extracting" state ──
+  useEffect(() => {
+    const anyExtracting = rows.some((r) => r.status === "extracting");
+    if (!anyExtracting) return;
+
+    const timer = window.setInterval(async () => {
+      const extracting = rowsRef.current.filter((r) => r.status === "extracting");
+      await Promise.all(
+        extracting.map(async (row) => {
+          if (row.startedAt && Date.now() - row.startedAt > POLL_TIMEOUT_MS) {
+            updateRow(row.uid, { status: "done" }); // give up gracefully; keeps processing server-side
+            toast(`${row.result?.client_name ?? "A meeting"} is still extracting — check AI Validation later.`, {
+              icon: "⏱️",
+              duration: 7_000,
+            });
+            return;
+          }
+          try {
+            const extraction = await fetchExtractionForMeeting(row.meetingId!);
+            if (extraction) {
+              updateRow(row.uid, { status: "done" });
+              toast.success(
+                `Extraction ready for ${row.result?.client_name ?? "meeting"} — ${extraction.total_fields} fields.`,
+                { duration: 5_000 },
+              );
+            }
+          } catch {
+            /* transient — keep polling */
+          }
+        }),
+      );
+    }, POLL_INTERVAL_MS);
+
+    return () => window.clearInterval(timer);
+  }, [rows]);
+
+  // ── Derived counts for the action bar ──
+  const counts = useMemo(() => {
+    const ready = rows.filter((r) => (r.status === "ready" || r.status === "failed") && canIngestRow(r)).length;
+    const busy = rows.filter((r) => r.status === "ingesting" || r.status === "extracting").length;
+    const done = rows.filter((r) => r.status === "done").length;
+    return { ready, busy, done, total: rows.length };
+  }, [rows]);
+
+  // How many entry rows would actually be fetched (non-empty, unique, new).
+  const pendingCount = useMemo(() => {
+    const existing = new Set(rows.map((r) => r.input.toLowerCase()));
+    return new Set(
+      inputs.map((i) => i.value.trim().toLowerCase()).filter((v) => v && !existing.has(v)),
+    ).size;
+  }, [inputs, rows]);
 
   return (
-    <div className="max-w-3xl mx-auto p-4">
+    <div className="max-w-4xl mx-auto p-4">
       <header className="mb-5">
-        <p className="text-green text-xs font-black uppercase font-montserrat m-0">
-          Ingest from Fireflies
-        </p>
-        <h1>Add a past meeting</h1>
+        <p className="text-green text-xs font-black uppercase font-montserrat m-0">Ingest from Fireflies</p>
+        <h1>{mode === "single" ? "Add a meeting" : "Add meetings"}</h1>
         <p className="text-muted text-sm">
-          Paste a Google Meet code (e.g. <code>rco-jucv-rwm</code>) or a
-          Fireflies share URL. We&apos;ll detect the advisor + client, save
-          the transcript, and run the 174-field extraction.
+          Paste a Google Meet code (e.g. <code>rco-jucv-rwm</code>) or Fireflies URL. We detect
+          advisor + client, then run the extraction with your selected agents.
         </p>
       </header>
 
-      {/* ── Step 1: URL form ── */}
-      <form
-        onSubmit={handlePreview}
-        className="grid gap-3 p-4 border border-line rounded-2xl bg-white shadow-card mb-4"
-      >
-        <label className="grid gap-1">
-          <span className="text-xs font-extrabold text-muted uppercase">
-            Meet code or Fireflies URL
-          </span>
-          <input
-            type="text"
-            className="form-field w-full min-h-[44px] px-3 py-2 border border-line rounded-lg outline-none bg-white"
-            placeholder="rco-jucv-rwm  or  https://app.fireflies.ai/view/..."
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            disabled={previewing || ingesting}
-            required
-          />
-        </label>
+      {/* ── Mode toggle ── */}
+      <div className="inline-flex items-center gap-1 p-1 border border-line rounded-lg bg-[#f9f9f9] mb-4">
+        {([
+          ["single", "Single meeting"],
+          ["multiple", "Multiple meetings"],
+        ] as const).map(([m, label]) => (
+          <button
+            key={m}
+            type="button"
+            onClick={() => switchMode(m)}
+            disabled={previewingAll || ingestingAll || counts.busy > 0}
+            className={`min-h-[30px] px-4 rounded-md text-xs font-black cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+              mode === m ? "bg-white border border-line text-ink shadow-sm" : "text-muted hover:text-ink"
+            }`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
 
-        <div className="flex justify-end">
+      {/* ── Entry ── */}
+      <form
+        onSubmit={handleFetchAll}
+        className="grid gap-2 p-4 border border-line rounded-2xl bg-white shadow-card mb-4"
+      >
+        <span className="text-xs font-extrabold text-muted uppercase">
+          {mode === "single" ? "Meeting" : "Meetings to add"}
+          {mode === "multiple" && (
+            <span className="font-normal normal-case"> — one per row (paste a list to split automatically)</span>
+          )}
+        </span>
+
+        <div className="grid gap-2">
+          {(mode === "single" ? inputs.slice(0, 1) : inputs).map((it, idx) => (
+            <div key={it.uid} className="flex items-center gap-2">
+              {mode === "multiple" && (
+                <span className="w-6 shrink-0 text-right text-xs font-black text-muted tabular-nums">{idx + 1}</span>
+              )}
+              <input
+                ref={(el) => { inputRefs.current[it.uid] = el; }}
+                type="text"
+                className="form-field flex-1 min-w-0 min-h-[42px] px-3 py-2 border border-line rounded-lg outline-none bg-white font-mono text-sm"
+                placeholder={idx === 0 ? "rco-jucv-rwm  or  https://app.fireflies.ai/view/..." : "another meeting…"}
+                value={it.value}
+                disabled={previewingAll}
+                onChange={(e) => setInputValue(it.uid, e.target.value)}
+                onPaste={(e) => handlePaste(it.uid, e)}
+                onKeyDown={(e) => {
+                  if (mode === "multiple" && e.key === "Enter") {
+                    e.preventDefault();
+                    if (e.currentTarget.value.trim()) addInput(it.uid);
+                  }
+                }}
+              />
+              {mode === "multiple" && (
+                <button
+                  type="button"
+                  onClick={() => removeInput(it.uid)}
+                  disabled={previewingAll || (inputs.length === 1 && !it.value.trim())}
+                  className="shrink-0 w-9 h-9 grid place-items-center border border-line rounded-lg bg-white text-muted hover:bg-surface-soft hover:text-red disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Remove this row"
+                >
+                  ✕
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div className="flex items-center justify-between gap-3 pt-1">
+          {mode === "multiple" ? (
+            <button
+              type="button"
+              onClick={() => addInput()}
+              disabled={previewingAll}
+              className="inline-flex items-center gap-1.5 px-3 py-2 border border-line rounded-lg bg-white text-ink text-xs font-black hover:bg-surface-soft disabled:opacity-50"
+            >
+              + Add meeting
+            </button>
+          ) : (
+            <span />
+          )}
           <button
             type="submit"
-            disabled={previewing || ingesting || !url.trim()}
+            disabled={previewingAll || pendingCount === 0}
             className="px-4 py-2 border border-[#138773] rounded-lg bg-[#138773] text-white font-extrabold hover:opacity-90 disabled:opacity-50"
           >
-            {previewing ? "Fetching…" : "Fetch details"}
+            {previewingAll
+              ? "Fetching…"
+              : mode === "single"
+              ? "Fetch details"
+              : `${rows.length ? "Add" : "Fetch"} ${pendingCount || ""} ${pendingCount === 1 ? "meeting" : "meetings"}`.replace(/\s+/g, " ").trim()}
           </button>
         </div>
       </form>
 
-      {/* ── Step 2: Preview card ── */}
-      {preview && (
-        <div className="p-4 border border-line rounded-2xl bg-white shadow-card">
-          <div className="mb-3">
-            <h2 className="text-lg font-bold m-0">{preview.title || "(no title)"}</h2>
-            <p className="text-muted text-xs mt-1 m-0">
-              {preview.date ? new Date(preview.date).toLocaleString() : "—"} ·{" "}
-              {preview.duration_minutes} min · Fireflies id{" "}
-              <code className="text-[11px]">{preview.fireflies_meeting_id}</code>
+      {/* ── Rows ── */}
+      {rows.length > 0 && (
+        <>
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-extrabold text-muted uppercase m-0">
+              Meetings ({rows.length})
             </p>
-          </div>
-
-          {/* Attendee table */}
-          <div className="mb-3">
-            <p className="text-xs font-extrabold text-muted uppercase mb-1">
-              Attendees ({preview.non_bot_attendees.length} non-bot)
-            </p>
-            <div className="grid gap-1.5">
-              {preview.non_bot_attendees.map((a) => {
-                const isAdvisor =
-                  preview.advisor_match?.email.toLowerCase() === a.email.toLowerCase();
-                const isClient =
-                  preview.client?.email.toLowerCase() === a.email.toLowerCase();
-                return (
-                  <div
-                    key={a.email}
-                    className="flex items-center justify-between gap-2 p-2.5 border border-line rounded-lg bg-surface-soft"
-                  >
-                    <div className="min-w-0">
-                      <p className="m-0 text-sm font-extrabold text-ink truncate">
-                        {a.displayName || a.email.split("@")[0]}
-                      </p>
-                      <p className="m-0 text-[11px] text-muted truncate">{a.email}</p>
-                    </div>
-                    {isAdvisor && (
-                      <span className="text-[10px] font-black uppercase px-2 py-1 rounded bg-[#d8fff6] text-ink">
-                        Advisor ✓
-                      </span>
-                    )}
-                    {isClient && (
-                      preview.existing_client ? (
-                        <span
-                          className="text-[10px] font-black uppercase px-2 py-1 rounded bg-[#fff4d6] text-ink"
-                          title={`Existing client (id ${preview.existing_client.id})`}
-                        >
-                          Client (existing)
-                        </span>
-                      ) : (
-                        <span className="text-[10px] font-black uppercase px-2 py-1 rounded bg-surface text-muted">
-                          Client (new)
-                        </span>
-                      )
-                    )}
-                    {!isAdvisor && !isClient && (
-                      <span className="text-[10px] font-black uppercase px-2 py-1 rounded bg-[rgba(202,78,78,0.06)] text-red">
-                        Unmatched
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Transcript status */}
-          <div className="mb-3 text-xs">
-            <span className="text-muted">Transcript: </span>
-            {preview.transcript_ready ? (
-              <span className="text-green font-extrabold">
-                Ready ({preview.transcript_length.toLocaleString()} chars)
-              </span>
-            ) : (
-              <span className="text-red font-extrabold">Not ready yet</span>
+            {counts.done > 0 && (
+              <button
+                type="button"
+                onClick={() => navigate("/dashboard/ai-validation")}
+                className="text-xs font-black text-[#138773] hover:underline"
+              >
+                Open AI Validation →
+              </button>
             )}
           </div>
 
-          {/* Already-ingested notice */}
-          {preview.already_ingested_meeting_id && !preview.would_skip_reason && (
-            <div className="mb-3 px-3 py-2 border border-[rgba(202,150,40,0.35)] rounded-lg bg-[#fff8e6] text-[#7a5a14] text-sm">
-              <strong>This meeting has already been ingested.</strong>{" "}
-              {preview.extraction_exists
-                ? "Re-analyzing will re-run the 174-field extraction and overwrite the existing one."
-                : "The previous extraction did not complete. Re-analyzing will retry it."}
-              {" "}No duplicate clients or transcripts will be created.
-            </div>
-          )}
+          <div className="grid gap-2.5">
+            {rows.map((row) => {
+              const p = row.preview;
+              const locked = row.status === "ingesting" || row.status === "extracting" || row.status === "done";
+              return (
+                <div key={row.uid} className="p-3.5 border border-line rounded-2xl bg-white shadow-card">
+                  {/* Row header */}
+                  <div className="flex items-start justify-between gap-3 mb-2">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <h3 className="text-sm font-extrabold text-ink m-0 truncate">
+                          {p?.title || row.input}
+                        </h3>
+                        <StatusBadge row={row} />
+                      </div>
+                      <p className="text-[11px] text-muted mt-0.5 m-0 truncate">
+                        {p
+                          ? `${p.date ? new Date(p.date).toLocaleString() : "—"} · ${p.duration_minutes} min · ${row.input}`
+                          : row.input}
+                      </p>
+                    </div>
+                    {!locked && (
+                      <button
+                        type="button"
+                        onClick={() => removeRow(row.uid)}
+                        className="shrink-0 w-7 h-7 grid place-items-center border border-line rounded-lg bg-white text-muted hover:bg-surface-soft hover:text-red"
+                        title="Remove"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
 
-          {/* Skip warning */}
-          {preview.would_skip_reason && (
-            <div className="mb-3 px-3 py-2 border border-[rgba(202,78,78,0.35)] rounded-lg bg-[rgba(202,78,78,0.06)] text-red text-sm">
-              Cannot ingest: {preview.would_skip_reason}
-            </div>
-          )}
+                  {/* Preview error */}
+                  {row.status === "preview_error" && (
+                    <div className="px-3 py-2 border border-[rgba(202,78,78,0.3)] rounded-lg bg-[rgba(202,78,78,0.06)] text-red text-xs">
+                      {row.previewError}
+                    </div>
+                  )}
 
-          {/* Actions */}
-          <div className="flex items-center justify-end gap-2 pt-1">
-            <button
-              type="button"
-              onClick={() => {
-                setPreview(null);
-                setUrl("");
-              }}
-              disabled={ingesting}
-              className="px-4 py-2 border border-line rounded-lg bg-white text-ink hover:bg-surface-soft disabled:opacity-50"
-            >
-              Start over
-            </button>
-            <button
-              type="button"
-              onClick={handleIngestClick}
-              disabled={!canIngest || ingesting}
-              className="px-4 py-2 border border-[#138773] rounded-lg bg-[#138773] text-white font-extrabold hover:opacity-90 disabled:opacity-50"
-            >
-              {ingesting
-                ? "Ingesting…"
-                : preview?.already_ingested_meeting_id
-                  ? "Re-analyze meeting"
-                  : "Ingest meeting"}
-            </button>
+                  {/* Ingest error */}
+                  {row.status === "failed" && row.ingestError && (
+                    <div className="px-3 py-2 border border-[rgba(202,78,78,0.3)] rounded-lg bg-[rgba(202,78,78,0.06)] text-red text-xs mb-2">
+                      {row.ingestError}
+                    </div>
+                  )}
+
+                  {/* Preview body */}
+                  {p && (
+                    <>
+                      {/* Match summary */}
+                      <div className="flex flex-wrap items-center gap-1.5 mb-2 text-[11px]">
+                        {p.advisor_match ? (
+                          <span className="px-2 py-1 rounded bg-[#d8fff6] text-ink font-black">
+                            Advisor: {p.advisor_match.full_name}
+                          </span>
+                        ) : (
+                          <span className="px-2 py-1 rounded bg-[rgba(202,78,78,0.06)] text-red font-black">
+                            No advisor matched
+                          </span>
+                        )}
+                        {p.client && (
+                          <span
+                            className={`px-2 py-1 rounded font-black ${
+                              p.existing_client ? "bg-[#fff4d6] text-ink" : "bg-surface text-muted"
+                            }`}
+                          >
+                            Client: {p.client.displayName || p.client.email.split("@")[0]}
+                            {p.existing_client ? " (existing)" : " (new)"}
+                          </span>
+                        )}
+                        <span className={p.transcript_ready ? "px-2 py-1 rounded bg-surface-soft text-green font-black" : "px-2 py-1 rounded bg-surface-soft text-red font-black"}>
+                          {p.transcript_ready ? `Transcript ${p.transcript_length.toLocaleString()} chars` : "Transcript not ready"}
+                        </span>
+                      </div>
+
+                      {p.would_skip_reason && (
+                        <div className="px-3 py-2 mb-2 border border-[rgba(202,78,78,0.3)] rounded-lg bg-[rgba(202,78,78,0.06)] text-red text-xs">
+                          Cannot ingest: {p.would_skip_reason}
+                        </div>
+                      )}
+
+                      {p.already_ingested_meeting_id && !p.would_skip_reason && (
+                        <div className="px-3 py-2 border border-[rgba(202,150,40,0.35)] rounded-lg bg-[#fff8e6] text-[#7a5a14] text-xs">
+                          Already ingested — ingesting again will re-run extraction (no duplicate client/transcript).
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              );
+            })}
           </div>
-        </div>
-      )}
 
-      <ConfirmDialog
-        open={confirmReingest}
-        title="Re-analyze this meeting?"
-        message={
-          preview?.extraction_exists ? (
-            <>
-              This meeting was already analyzed. Re-running will replace the
-              existing 174-field extraction with a fresh one. The meeting,
-              transcript, and client will <strong>not</strong> be duplicated.
-            </>
-          ) : (
-            <>
-              This meeting was already ingested but the extraction did not
-              complete. We'll retry the 174-field extraction. The meeting
-              and transcript stay as-is.
-            </>
-          )
-        }
-        variant="primary"
-        confirmLabel={preview?.extraction_exists ? "Re-analyze" : "Retry analysis"}
-        cancelLabel="Cancel"
-        busy={ingesting}
-        onConfirm={doIngest}
-        onClose={() => !ingesting && setConfirmReingest(false)}
-      />
+          {/* ── Action bar ── */}
+          <div className="sticky bottom-0 mt-3 flex items-center justify-between gap-3 px-4 py-3 border border-line rounded-2xl bg-white/95 backdrop-blur shadow-card">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-xs text-muted whitespace-nowrap">
+                {mode === "single" ? "Agents:" : "Agents (all):"}
+              </span>
+              <AgentMultiSelect
+                options={agentOptions}
+                selected={agents}
+                onChange={setAgents}
+                disabled={ingestingAll || counts.busy > 0}
+                dropUp
+              />
+              <span className="hidden md:inline text-xs text-muted whitespace-nowrap ml-2">
+                {counts.ready} ready · {counts.busy} processing · {counts.done} done
+              </span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setRows([])}
+                disabled={ingestingAll || counts.busy > 0}
+                className="px-4 py-2 border border-line rounded-lg bg-white text-ink hover:bg-surface-soft disabled:opacity-50"
+              >
+                Clear
+              </button>
+              <button
+                type="button"
+                onClick={handleIngestAll}
+                disabled={ingestingAll || counts.ready === 0}
+                className="px-4 py-2 border border-[#138773] rounded-lg bg-[#138773] text-white font-extrabold hover:opacity-90 disabled:opacity-50"
+              >
+                {ingestingAll
+                  ? "Ingesting…"
+                  : mode === "single"
+                  ? "Ingest meeting"
+                  : `Ingest ${counts.ready || ""} ${counts.ready === 1 ? "meeting" : "meetings"}`.replace(/\s+/g, " ").trim()}
+              </button>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
