@@ -1,4 +1,3 @@
-import React from "react";
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Calendar03Icon,
@@ -11,7 +10,10 @@ import {
 } from "@hugeicons/core-free-icons";
 import SortableTableHeader from "../shared/SortableTableHeader";
 
-export default function SchedulingTable({ records, sortKey, sortDirection, onSort }: any) {
+export default function SchedulingTable({ records, sortKey, sortDirection, onSort, onCancel, onReschedule }: any) {
+  function isTerminal(status: string) {
+    return status === "Canceled" || status === "Completed";
+  }
   function pillClass(status: any) {
     if (status === "Canceled") return "bg-[#ffe8e5] text-red";
     if (status === "Completed") return "bg-[#eef8f5] text-[#46605a]";
@@ -110,18 +112,22 @@ export default function SchedulingTable({ records, sortKey, sortDirection, onSor
                     </button>
                   )}
                   <button
-                    className="flex justify-center items-center min-w-[34px] min-h-[30px] border border-line rounded-lg bg-white text-ink transition-transform active:scale-95 cursor-pointer hover:bg-surface-soft"
+                    className={`flex justify-center items-center min-w-[34px] min-h-[30px] border border-line rounded-lg bg-white text-ink transition-transform active:scale-95 ${isTerminal(record.status) ? "opacity-40 cursor-not-allowed" : "cursor-pointer hover:bg-surface-soft"}`}
                     type="button"
                     aria-label="Reschedule meeting"
-                    title="Reschedule meeting"
+                    title={isTerminal(record.status) ? `Cannot reschedule a ${record.status.toLowerCase()} meeting` : "Reschedule meeting"}
+                    disabled={isTerminal(record.status)}
+                    onClick={() => onReschedule && onReschedule(record)}
                   >
                     <HugeiconsIcon icon={RefreshIcon} size={14} strokeWidth={2.5} />
                   </button>
                   <button
-                    className="flex justify-center items-center min-w-[34px] min-h-[30px] border border-[rgba(202,78,78,0.35)] rounded-lg bg-white text-red transition-transform active:scale-95 cursor-pointer hover:bg-[rgba(202,78,78,0.05)]"
+                    className={`flex justify-center items-center min-w-[34px] min-h-[30px] border border-[rgba(202,78,78,0.35)] rounded-lg bg-white text-red transition-transform active:scale-95 ${isTerminal(record.status) ? "opacity-40 cursor-not-allowed" : "cursor-pointer hover:bg-[rgba(202,78,78,0.05)]"}`}
                     type="button"
                     aria-label="Cancel meeting"
-                    title="Cancel meeting"
+                    title={isTerminal(record.status) ? `Already ${record.status.toLowerCase()}` : "Cancel meeting"}
+                    disabled={isTerminal(record.status)}
+                    onClick={() => onCancel && onCancel(record)}
                   >
                     <HugeiconsIcon icon={Cancel01Icon} size={14} strokeWidth={2.5} />
                   </button>

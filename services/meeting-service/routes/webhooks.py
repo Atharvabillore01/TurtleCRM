@@ -21,10 +21,20 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request, status
 
 from config import settings
-from db.meeting_procs import proc_find_meeting_by_meet_url
+from db.meeting_procs import (
+    proc_find_meeting_by_meet_url,
+    proc_ingest_meeting_from_fireflies,
+)
 from eventbus import publish_event
 from firefly_client import FireflyClient
 from logger import get_logger
+# Reuse the classification + advisor-match logic from manual ingest so the
+# webhook fallback path behaves identically. Underscore-named functions
+# are imported deliberately — they're internal but stable, single home.
+from routes.ingest import (
+    _classify_attendees as classify_attendees,
+    ACTOR_EMAIL,
+)
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 logger = get_logger("meeting-service")
@@ -37,8 +47,8 @@ TRANSCRIBED_EVENTS = {
     "transcript_ready",
     "TRANSCRIPT_READY",
     "Meeting Transcribed",
-}
-SUMMARIZED_EVENTS = {
+    # Fireflies fires meeting.summarized after transcription is complete;
+    # treat it as the trigger since meeting.transcribed never arrives in practice.
     "meeting.summarized",
     "Meeting completed",
     "meeting_completed",
@@ -111,8 +121,6 @@ async def firefly_webhook(request: Request):
 
     if event_type in TRANSCRIBED_EVENTS:
         await _handle_transcript_ready(firefly_meeting_id)
-    elif event_type in SUMMARIZED_EVENTS:
-        logger.info("firefly_summary_ack", extra={"firefly_meeting_id": firefly_meeting_id})
     else:
         logger.warning("firefly_unknown_event", extra={"event_type": event_type})
 
@@ -209,20 +217,36 @@ async def _handle_transcript_ready(
             "error": str(exc), "meet_url": meet_url,
         })
         return
-    if meeting_row is None:
-        logger.info("firefly_transcript_no_matching_meeting", extra={
-            "firefly_meeting_id": firefly_meeting_id,
-            "meet_url": meet_url,
-        })
-        return
 
-    client_user_ids = meeting_row.get("client_user_ids") or []
-    ctx = {
-        "meeting_id":    meeting_row["id"],
-        "client_id":     client_user_ids[0] if client_user_ids else "",
-        "agenda":        meeting_row.get("agenda") or "",
-        "agents_to_use": list(meeting_row.get("agents_to_use") or []),
-    }
+    if meeting_row is not None:
+        # ── Path A: meeting was pre-scheduled in our system ────────────
+        client_user_ids = meeting_row.get("client_user_ids") or []
+        ctx = {
+            "meeting_id":    meeting_row["id"],
+            "client_id":     client_user_ids[0] if client_user_ids else "",
+            "agenda":        meeting_row.get("agenda") or "",
+            "agents_to_use": list(meeting_row.get("agents_to_use") or []),
+        }
+        logger.info("firefly_webhook_matched_scheduled_meeting", extra={
+            "firefly_meeting_id": firefly_meeting_id,
+            "meeting_id":         ctx["meeting_id"],
+        })
+    else:
+        # ── Path B: no scheduled meeting → auto-ingest fallback ────────
+        # Same flow as the manual ingest endpoint: classify Fireflies
+        # attendees against adviser_users + auto-create client → call
+        # sp_ingest_meeting_from_fireflies → use that meeting_id.
+        ctx = await _auto_ingest_unscheduled_meeting(
+            firefly_meeting_id=firefly_meeting_id,
+            meet_url=meet_url,
+            title=title,
+            duration_minutes=int(duration) if duration else 0,
+            transcript_text=transcript_text,
+        )
+        if ctx is None:
+            # _auto_ingest_unscheduled_meeting logs the precise reason
+            # (no advisor matched / wrong attendee count / SP failure)
+            return
 
     try:
         saved_path = _save_transcript_to_file(
@@ -266,3 +290,107 @@ async def _handle_transcript_ready(
         "timestamp": datetime.now(timezone.utc).isoformat(),
     })
     logger.info("transcript_event_published", extra={"firefly_meeting_id": firefly_meeting_id})
+
+
+async def _auto_ingest_unscheduled_meeting(
+    *,
+    firefly_meeting_id: str,
+    meet_url: str,
+    title: str,
+    duration_minutes: int,
+    transcript_text: str,
+) -> dict | None:
+    """Fallback path when a Fireflies-recorded meeting was NOT pre-scheduled
+    in our system. Mirrors the manual-ingest flow (routes/ingest.py):
+
+      1. Fetch attendees from Fireflies (transcript already loaded by caller).
+      2. Filter the bot + system actor; require exactly 2 real attendees.
+      3. Match one against `adviser_users JOIN advisors`.
+      4. The other becomes the client (find-or-create in client_users).
+      5. Call sp_ingest_meeting_from_fireflies → returns meeting_id.
+
+    Returns the same `ctx` dict shape Path A produces so the caller's
+    publish_event payload stays identical. Returns None to abort (caller
+    bails out — every rejection reason is logged in detail).
+    """
+    if not settings.firefly_api_key:
+        logger.warning("auto_ingest_skipped_no_api_key", extra={
+            "firefly_meeting_id": firefly_meeting_id,
+        })
+        return None
+
+    # 1. Fetch attendees from Fireflies. The transcript is already loaded
+    #    by the caller — we only need the attendee list here.
+    try:
+        client = FireflyClient(settings.firefly_api_key)
+        firefly_meta = await client.fetch_for_ingest(firefly_meeting_id)
+    except Exception as exc:
+        logger.error("auto_ingest_firefly_attendee_fetch_failed", extra={
+            "error":              str(exc),
+            "firefly_meeting_id": firefly_meeting_id,
+        })
+        return None
+
+    attendees = firefly_meta.get("attendees") or []
+    start_dt  = firefly_meta.get("date")   # epoch ms or ISO string per Fireflies shape
+
+    # 2 + 3. Classify (filter bot/actor, exactly 2 real, one in adviser_users).
+    classified = await classify_attendees(attendees)
+    if classified["skip_reason"]:
+        logger.info("auto_ingest_classification_rejected", extra={
+            "firefly_meeting_id": firefly_meeting_id,
+            "meet_url":           meet_url,
+            "skip_reason":        classified["skip_reason"],
+            "attendee_emails":    [a["email"] for a in classified["non_bot"]],
+        })
+        return None
+
+    advisor = classified["advisor_match"]
+    client_attendee = classified["client"]
+
+    # 4 + 5. Call the same SP that manual ingest uses.
+    try:
+        result = await proc_ingest_meeting_from_fireflies(
+            fireflies_meeting_id=firefly_meeting_id,
+            meeting_url=meet_url or None,
+            title=title or f"Meeting {firefly_meeting_id[-6:]}",
+            start_time=start_dt,
+            duration_minutes=duration_minutes or 60,
+            advisor_email=advisor["email"],
+            client_email=client_attendee["email"],
+            client_display_name=client_attendee.get("displayName") or None,
+            transcript_text=transcript_text,
+            actor_email=ACTOR_EMAIL,
+            idempotency_key=None,    # natural key on fireflies_meeting_id handles dedupe
+        )
+    except ValueError as exc:
+        # 1020 (no advisor) / 1021 (no actor) / 1008 (bad params)
+        logger.warning("auto_ingest_sp_rejected", extra={
+            "firefly_meeting_id": firefly_meeting_id,
+            "advisor_email":      advisor["email"],
+            "client_email":       client_attendee["email"],
+            "error":              str(exc),
+        })
+        return None
+    except Exception as exc:
+        logger.exception("auto_ingest_sp_failed", extra={
+            "firefly_meeting_id": firefly_meeting_id,
+        })
+        return None
+
+    new_meeting_id = result.get("meeting_id")
+    logger.info("auto_ingest_created_meeting", extra={
+        "firefly_meeting_id": firefly_meeting_id,
+        "meeting_id":         new_meeting_id,
+        "advisor_email":      advisor["email"],
+        "client_email":       client_attendee["email"],
+        "was_new_client":     bool(result.get("was_new_client")),
+        "was_replay":         bool(result.get("was_replay")),
+    })
+
+    return {
+        "meeting_id":    str(new_meeting_id),
+        "client_id":     str(result.get("client_user_id") or ""),
+        "agenda":        "",     # auto-ingested meetings have no pre-set agenda
+        "agents_to_use": [],     # empty → transcript_processor expands to all
+    }

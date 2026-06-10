@@ -686,18 +686,17 @@ async def _sp_cancel_meeting(
 
 async def _fn_get_extraction(extraction_id: str) -> ProcResult:
     """
-    Real DB call to deployed `fn_get_extraction` (Wave D).
+    Real DB call to deployed `fn_get_extraction` (migration 022+).
 
-    AI Validation page DETAIL view. Returns one extraction with full
-    `raw_data` (174-field JSONB) PLUS `recent_edits` — the last 50
-    rows from extraction_field_audit, each enriched with the reviewer's
-    `team_users.name`. Reviewer can see what's been changed and by whom
-    before approving.
+    AI Validation page DETAIL view. Returns one extraction with the
+    normalized `fields` JSONB array (one entry per field, enriched
+    with touch_point + attribute from field_definitions) PLUS
+    `recent_edits` (last 50 audit rows).
 
-    LEGACY SHAPE PRESERVED:
-      Returns a dict (not the legacy ExtractionRow dataclass). The route
-      handler at routes/extractions.py:30 already handles both via
-      `r if isinstance(r, dict) else asdict(r)`.
+    For backward compatibility with the existing UI that expects a
+    `raw_data` dict keyed by field_id string, we ALSO project the
+    fields array into a `raw_data` dict here. New UI code should
+    prefer `fields` (preserves ordering + display_order).
     """
     from db.pool import get_pool
 
@@ -728,14 +727,46 @@ async def _fn_get_extraction(extraction_id: str) -> ProcResult:
         elif hasattr(v, "as_tuple"):
             d[k] = float(v)
 
-    # raw_data + recent_edits may come back as JSONB strings; parse defensively.
-    for jsonb_key in ("raw_data", "recent_edits"):
+    # JSONB columns may arrive as Python strings via asyncpg — parse them.
+    for jsonb_key in ("fields", "recent_edits"):
         v = d.get(jsonb_key)
         if isinstance(v, str):
             try:
-                d[jsonb_key] = _json.loads(v) if v else ({} if jsonb_key == "raw_data" else [])
+                d[jsonb_key] = _json.loads(v) if v else []
             except ValueError:
-                d[jsonb_key] = {} if jsonb_key == "raw_data" else []
+                d[jsonb_key] = []
+        elif v is None:
+            d[jsonb_key] = []
+
+    # total_fields can be BIGINT — coerce to int for clean JSON.
+    if d.get("total_fields") is not None:
+        try:
+            d["total_fields"] = int(d["total_fields"])
+        except (TypeError, ValueError):
+            d["total_fields"] = 0
+
+    # Backward-compat: project the fields[] array into a raw_data dict
+    # keyed by field_id string ("1", "2", …). The pre-022 UI consumes
+    # this shape directly. Each entry mirrors the legacy RawField shape:
+    #   { value, confidence, confidence_level, source, agent,
+    #     attribute, touch_point }
+    raw_data: dict[str, dict] = {}
+    for entry in d.get("fields") or []:
+        if not isinstance(entry, dict):
+            continue
+        fid = entry.get("field_id")
+        if fid is None:
+            continue
+        raw_data[str(fid)] = {
+            "value":            entry.get("value"),
+            "confidence":       entry.get("confidence"),
+            "confidence_level": entry.get("confidence_level"),
+            "source":           entry.get("source"),
+            "agent":            entry.get("agent"),
+            "attribute":        entry.get("attribute"),
+            "touch_point":      entry.get("touch_point"),
+        }
+    d["raw_data"] = raw_data
 
     return ProcResult(result=d)
 
@@ -976,17 +1007,16 @@ async def _fn_list_extractions(
     offset: int = 0,
 ) -> ProcResult:
     """
-    Real DB call to deployed `fn_list_extractions` (Wave D).
+    Real DB call to deployed `fn_list_extractions` (migration 022+).
 
-    The SP intentionally omits `raw_data` (10–100KB JSONB) from its return
-    shape for list-page perf. BUT the AI Validation page's React component
-    (AiValidationPage.tsx) reads `e.raw_data` from list rows to compute the
-    average-confidence preview. To keep the frontend working without a
-    refactor we do a SINGLE follow-up query that pulls raw_data for all
-    returned ids in one round-trip and merges it into each row.
+    The SP intentionally omits the per-field payload from the list view —
+    only meeting context, totals, and validation state are returned. To get
+    the actual extracted values for a given extraction, call
+    `fn_get_extraction(extraction_id)` (returns `fields` JSONB array).
 
-    Two queries, not N+1. Drop the follow-up query later when the AI
-    Validation page moves to per-row detail fetches via fn_get_extraction.
+    `total_fields` is now BIGINT (computed live via COUNT on
+    extraction_fields — the old `extractions.total_fields` column was
+    removed in migration 022).
 
     Args mirror the SP signature; the route handler currently passes only
     `validated`, the rest accept their defaults.
@@ -997,36 +1027,12 @@ async def _fn_list_extractions(
     cid = _to_uuid(client_id)  if client_id  else None
 
     async with get_pool().acquire() as conn:
-        # 1. List with meeting context (no raw_data)
         rows = await conn.fetch(
             "SELECT * FROM fn_list_extractions("
             " $1::boolean, $2::uuid, $3::uuid, $4::int, $5::int)",
             validated, mid, cid, limit, offset,
         )
 
-        if not rows:
-            return ProcResult(result=[])
-
-        # 2. One-shot raw_data fetch for all returned ids
-        extraction_ids = [r["id"] for r in rows]
-        raw_rows = await conn.fetch(
-            "SELECT id, raw_data FROM extractions WHERE id = ANY($1::uuid[])",
-            extraction_ids,
-        )
-
-    # ---- Build a {id → raw_data dict} map ----
-    import json as _json
-    raw_by_id: dict[str, dict] = {}
-    for rr in raw_rows:
-        raw = rr["raw_data"]
-        if isinstance(raw, str):
-            try:
-                raw = _json.loads(raw) if raw else {}
-            except ValueError:
-                raw = {}
-        raw_by_id[str(rr["id"])] = raw if isinstance(raw, dict) else {}
-
-    # ---- Normalise rows + attach raw_data ----
     result: list[dict] = []
     for r in rows:
         d = dict(r)
@@ -1042,7 +1048,12 @@ async def _fn_list_extractions(
                 d[k] = v.isoformat()
             elif hasattr(v, "as_tuple"):
                 d[k] = float(v)
-        d["raw_data"] = raw_by_id.get(d["id"], {})
+        # total_fields can come back as int (BIGINT) — make sure it's an int, not Decimal.
+        if d.get("total_fields") is not None:
+            try:
+                d["total_fields"] = int(d["total_fields"])
+            except (TypeError, ValueError):
+                d["total_fields"] = 0
         result.append(d)
 
     return ProcResult(result=result)
@@ -1319,10 +1330,30 @@ async def proc_save_action_item(**kwargs) -> str:
     return res.result
 
 
-async def proc_cancel_meeting(**kwargs):
-    res = await call_proc("sp_cancel_meeting", **kwargs)
-    if not res.ok:
-        raise ValueError(res.errormessage) if res.errornumber in (2004, 2005) else RuntimeError(res.errormessage)
+async def proc_cancel_meeting(
+    *,
+    meeting_id: str,
+    actor_id: str | None = None,
+    reason: str | None = None,
+    idempotency_key: str | None = None,
+    # Legacy kwarg names — accept then ignore so old callers don't break.
+    cancelled_by: str | None = None,            # legacy → actor_id
+    cancellation_reason: str | None = None,     # legacy → reason
+):
+    """
+    Cancel a meeting via the deployed sp_cancel_meeting SP.
+
+    LEGACY COMPAT:
+      The old in-memory stub used kwargs `cancelled_by` + `cancellation_reason`.
+      Those are accepted here and forwarded to the SP's `actor_id` / `reason`
+      so route handlers can migrate at their own pace.
+    """
+    return await proc_cancel_meeting_v2(
+        meeting_id=meeting_id,
+        actor_id=actor_id or cancelled_by,
+        reason=reason or cancellation_reason,
+        idempotency_key=idempotency_key,
+    )
 
 
 async def proc_get_extraction(extraction_id: str) -> dict:
@@ -1408,6 +1439,8 @@ async def proc_schedule_meeting(
     agenda: str = "",
     google_meet_link: str | None = None,
     metadata: dict | None = None,
+    pre_meeting_notes: str | None = None,
+    idempotency_key: str | None = None,
     # Legacy compatibility shims — accept the old route's extra kwargs but ignore them.
     **legacy_kwargs,
 ) -> str:
@@ -1456,12 +1489,17 @@ async def proc_schedule_meeting(
         _normalise_uuid_list(adviser_user_ids),
         list(agents_to_use or []),
         metadata or {},
+        pre_meeting_notes,
+        idempotency_key,
     )
-    if not res.ok:
-        if res.errornumber in (1008, 1012, 1013):
-            raise ValueError(res.errormessage)
-        raise RuntimeError(res.errormessage)
-    return res.result["meeting_id"]
+    if res.ok:
+        return res.result["meeting_id"]
+    if res.errornumber == 1019:
+        # Idempotency replay — the SP returns the cached meeting_id.
+        return (res.result or {}).get("meeting_id")
+    if res.errornumber in (1008, 1012, 1013):
+        raise ValueError(res.errormessage)
+    raise RuntimeError(res.errormessage)
 
 
 async def proc_save_meeting_external_sync(
@@ -1565,6 +1603,8 @@ async def proc_save_extraction(
     extracted_at: str | None = None,
     duration_seconds: float = 0,
     total_fields: int | None = None,
+    token_usage: dict | None = None,   # migration 025 — per-agent token breakdown
+    call_analysis: dict | None = None, # migration 027 — AdvisoryAgent coaching report
     **legacy_kwargs,                # swallows `client_id` and any other legacy kwargs
 ) -> str:
     # asyncpg JSONB codec isn't guaranteed registered — pass a JSON string
@@ -1585,10 +1625,35 @@ async def proc_save_extraction(
         except ValueError as exc:
             raise ValueError(f"could not parse extracted_at: {exc}")
 
+    # Migration 022 removed extractions.total_fields — it's now derived
+    # from a COUNT on extraction_fields. v2 SP takes 8 params (no
+    # total_fields). The legacy `total_fields` kwarg is accepted for
+    # caller backward-compat but intentionally NOT passed to the SP.
+    _ = total_fields   # silence the unused-warning; kept for back-compat
+
+    # Migration 025: p_token_usage is the 9th positional arg. crm-agent
+    # returns it keyed by agent ({ "demographics": {...}, "__total__": {...} }).
+    # call_function json.dumps a dict for jsonb; None → SQL NULL (no rows
+    # exploded). Pass a JSON string so empty/unusual shapes still cast cleanly.
+    token_usage_json = (
+        _json.dumps(token_usage)
+        if isinstance(token_usage, dict) and token_usage
+        else None
+    )
+    # Migration 027: p_call_analysis is the 10th positional arg. crm-agent
+    # returns it as a standalone coaching blob (NOT a CRM field). Pass a JSON
+    # string (mirrors token_usage); empty/missing → None → SQL NULL.
+    call_analysis_json = (
+        _json.dumps(call_analysis)
+        if isinstance(call_analysis, dict) and call_analysis
+        else None
+    )
     res = await call_function(
         "sp_save_extraction",
         meeting_id, extraction_job_id, provider, model, raw_data_json,
-        transcript_id, extracted_at_dt, duration_seconds, total_fields,
+        transcript_id, extracted_at_dt, duration_seconds,
+        token_usage_json,
+        call_analysis_json,
     )
     if not res.ok:
         if res.errornumber in (1008, 1014):
@@ -1661,6 +1726,11 @@ async def proc_patch_extraction_fields(
                 f"version mismatch (current={current_version}, "
                 f"expected={expected_version}) — reload and retry"
             )
+        if res.errornumber == 1018:
+            # Extraction already validated — edits blocked. Raise a typed
+            # exception so the route can return HTTP 423 (Locked) and the
+            # UI can prompt the reviewer to unvalidate first.
+            raise PermissionError(res.errormessage)
         if res.errornumber in (1008, 1012, 1014):
             raise ValueError(res.errormessage)
         raise RuntimeError(res.errormessage)
@@ -1671,12 +1741,24 @@ async def proc_validate_extraction(  # type: ignore[override]
     *,
     extraction_id: str,
     validated_by: str,
+    reason: str,
+    notes: str | None = None,
+    # Legacy callers passed `validation_notes` as the only string. Accept it
+    # as a fallback for backward compat — but new code should pass `reason`.
     validation_notes: str | None = None,
     **legacy_kwargs,
 ) -> dict:
+    """
+    Phase 2 v2 — sp_validate_extraction now REQUIRES p_reason (≥5 chars).
+    Writes an audit row in extraction_validation_audit on every validation.
+
+    `reason` is the audit explanation (also stored on extractions.validation_notes).
+    `notes` is optional extra context that only lives in the audit row.
+    """
+    effective_reason = (reason or validation_notes or "").strip()
     res = await call_function(
         "sp_validate_extraction",
-        extraction_id, validated_by, validation_notes,
+        extraction_id, validated_by, effective_reason, notes,
     )
     if not res.ok:
         if res.errornumber == 1016:
@@ -1686,6 +1768,96 @@ async def proc_validate_extraction(  # type: ignore[override]
             raise ValueError(res.errormessage)
         raise RuntimeError(res.errormessage)
     return res.result
+
+
+async def proc_unvalidate_extraction(
+    *,
+    extraction_id: str,
+    unvalidated_by: str,
+    reason: str,
+    notes: str | None = None,
+) -> dict:
+    """
+    Phase 2 — reverts a validated extraction. Writes an audit row.
+
+    Raises:
+      ValueError on 1008 / 1012 / 1014 / 1019 (validation / not-validated /
+        not-found / missing args)
+      RuntimeError on unexpected DB failures (5000)
+    """
+    res = await call_function(
+        "sp_unvalidate_extraction",
+        extraction_id, unvalidated_by, reason, notes,
+    )
+    if not res.ok:
+        if res.errornumber in (1008, 1012, 1014, 1019):
+            raise ValueError(res.errormessage)
+        raise RuntimeError(res.errormessage)
+    return res.result
+
+
+async def proc_validation_history(
+    extraction_id: str,
+    limit: int = 10,
+) -> list[dict]:
+    """fn_extraction_validation_history — newest-first audit events."""
+    from db.pool import get_pool
+
+    eid = _to_uuid(extraction_id)
+    if eid is None:
+        return []
+
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM fn_extraction_validation_history($1::uuid, $2::int)",
+            eid, int(limit),
+        )
+
+    out: list[dict] = []
+    for r in rows:
+        d = dict(r)
+        for k, v in list(d.items()):
+            if isinstance(v, uuid.UUID):
+                d[k] = str(v)
+            elif isinstance(v, datetime):
+                d[k] = v.isoformat()
+            elif hasattr(v, "isoformat"):
+                d[k] = v.isoformat()
+        out.append(d)
+    return out
+
+
+async def proc_extraction_token_usage(extraction_id: str) -> list[dict]:
+    """
+    fn_extraction_token_usage — per-agent token consumption for one
+    extraction, biggest consumer first. Powers the Token Usage screen.
+
+    Plain table function (no 4-col envelope) — fetch directly. Returns an
+    empty list for an unknown id or for pre-025 extractions (no token rows).
+    """
+    from db.pool import get_pool
+
+    eid = _to_uuid(extraction_id)
+    if eid is None:
+        return []
+
+    async with get_pool().acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM fn_extraction_token_usage($1::uuid)",
+            eid,
+        )
+
+    out: list[dict] = []
+    for r in rows:
+        d = dict(r)
+        # input/output/total are plain INTEGERs; agent is text — all JSON-safe.
+        out.append({
+            "agent":         d.get("agent"),
+            "input_tokens":  int(d.get("input_tokens") or 0),
+            "output_tokens": int(d.get("output_tokens") or 0),
+            "total_tokens":  int(d.get("total_tokens") or 0),
+        })
+    return out
 
 
 # proc_get_extraction: defined earlier (line ~1483) as the call_proc-based
@@ -1702,5 +1874,272 @@ async def proc_validate_extraction(  # type: ignore[override]
 # means the merge always fires regardless of how the route invokes it.
 # The direct-call (call_function) variant that lived here was removed —
 # it bypassed the raw_data merge and would have broken the frontend.
+
+
+# ============================================================================
+# Meeting lifecycle wrappers  (deployed SPs in `meetings_new/` — 2026-05-28)
+# ----------------------------------------------------------------------------
+# These wrappers call the real Postgres SPs directly via call_function (not
+# via the registered-stub registry). They supersede the in-memory stubs
+# `_sp_cancel_meeting` and `_sp_update_meeting_status` defined earlier in
+# this file — those stubs remain only for backward-compat with any caller
+# that hasn't migrated; they should be considered deprecated.
+# ============================================================================
+
+async def proc_update_meeting_status_v2(
+    *,
+    meeting_id: str,
+    new_status: str,            # in_progress | completed | cancelled | no_show
+    actor_id: str | None = None,
+    reason: str | None = None,
+) -> dict:
+    """
+    Generic status-transition gate (deployed SP: sp_update_meeting_status).
+
+    Raises ValueError on invalid transitions (1008/1014/1018), RuntimeError
+    on infra errors. Returns the dict envelope with prior_status / new_status /
+    was_change.
+    """
+    res = await call_function(
+        "sp_update_meeting_status",
+        meeting_id, new_status, actor_id, reason,
+    )
+    if not res.ok:
+        if res.errornumber in (1008, 1014, 1018):
+            raise ValueError(res.errormessage)
+        raise RuntimeError(res.errormessage)
+    return res.result
+
+
+async def proc_complete_meeting(
+    *,
+    meeting_id: str,
+    actor_id: str | None = None,
+) -> dict:
+    """sp_complete_meeting — thin wrapper, idempotent on already-completed."""
+    res = await call_function("sp_complete_meeting", meeting_id, actor_id)
+    if not res.ok:
+        if res.errornumber in (1008, 1014, 1018):
+            raise ValueError(res.errormessage)
+        raise RuntimeError(res.errormessage)
+    return res.result
+
+
+async def proc_mark_no_show(
+    *,
+    meeting_id: str,
+    actor_id: str | None = None,
+    reason: str | None = None,
+) -> dict:
+    """
+    sp_mark_no_show — atomically flips meetings.status='no_show' AND
+    meeting_internal_details.is_no_show=TRUE. Idempotent.
+    """
+    res = await call_function(
+        "sp_mark_no_show",
+        meeting_id, actor_id, reason,
+    )
+    if not res.ok:
+        if res.errornumber in (1008, 1014, 1018):
+            raise ValueError(res.errormessage)
+        raise RuntimeError(res.errormessage)
+    return res.result
+
+
+async def proc_cancel_meeting_v2(
+    *,
+    meeting_id: str,
+    actor_id: str | None = None,
+    reason: str | None = None,
+    idempotency_key: str | None = None,
+) -> dict:
+    """
+    sp_cancel_meeting — sets status='cancelled', preserves history, optional
+    task cascade (config-gated). Idempotent via p_idempotency_key.
+
+    Errornumber 1019 (idempotency replay) is surfaced as a successful result
+    with was_replay=True — caller can treat it as success without retrying.
+    """
+    res = await call_function(
+        "sp_cancel_meeting",
+        meeting_id, actor_id, reason, idempotency_key,
+    )
+    if res.ok:
+        return res.result
+    if res.errornumber == 1019:
+        # Idempotency replay — cached response in res.result
+        return res.result or {"meeting_id": meeting_id, "was_replay": True}
+    if res.errornumber in (1008, 1014, 1018):
+        raise ValueError(res.errormessage)
+    raise RuntimeError(res.errormessage)
+
+
+async def proc_reschedule_meeting(
+    *,
+    meeting_id: str,
+    new_start_time,             # datetime or ISO string
+    new_end_time,               # datetime or ISO string
+    new_google_meet_link: str | None = None,
+    actor_id: str | None = None,
+    reason: str | None = None,
+    idempotency_key: str | None = None,
+) -> dict:
+    """
+    sp_reschedule_meeting — in-place update of start/end + optional Meet link;
+    bumps meeting_internal_details.reschedule_count. Status stays 'scheduled'.
+
+    Rejects when a meeting_transcripts row exists (errornumber 1017) unless
+    application_config('meeting.reschedule.blocked_when_transcript') is 'false'.
+
+    Caller should follow with proc_save_meeting_external_sync if a new
+    calendar event id was created (nextaction='patch_external_calendar').
+    """
+    # asyncpg's TIMESTAMPTZ codec rejects raw strings — normalise to datetime.
+    def _to_dt(v):
+        if v is None or isinstance(v, _dt):
+            return v
+        return _dt.fromisoformat(str(v).replace("Z", "+00:00"))
+
+    res = await call_function(
+        "sp_reschedule_meeting",
+        meeting_id,
+        _to_dt(new_start_time),
+        _to_dt(new_end_time),
+        new_google_meet_link,
+        actor_id,
+        reason,
+        idempotency_key,
+    )
+    if res.ok:
+        return res.result
+    if res.errornumber == 1019:
+        return res.result or {"meeting_id": meeting_id, "was_replay": True}
+    if res.errornumber in (1008, 1014, 1017, 1018):
+        raise ValueError(res.errormessage)
+    raise RuntimeError(res.errormessage)
+
+
+async def proc_ingest_meeting_from_fireflies(
+    *,
+    fireflies_meeting_id: str,
+    meeting_url: str | None,
+    title: str,
+    start_time,
+    duration_minutes: int,
+    advisor_email: str,
+    client_email: str,
+    client_display_name: str | None,
+    transcript_text: str,
+    actor_email: str,
+    idempotency_key: str | None = None,
+) -> dict:
+    """
+    Wraps sp_ingest_meeting_from_fireflies. Translates errornumber 1020/1021
+    into ValueError so the route can return a clean 422.
+
+    Returns the SP's result dict. On replay (natural key already ingested OR
+    client-side idempotency hit), the dict carries was_replay=True.
+    """
+    # Fireflies' GraphQL `date` field returns a Unix epoch in milliseconds
+    # (float/int), e.g. 1748534400000. The webhook payload uses ISO strings.
+    # Accept both: numbers → fromtimestamp; strings → fromisoformat.
+    try:
+        if isinstance(start_time, _dt):
+            start_dt = start_time
+        elif isinstance(start_time, (int, float)):
+            # Detect seconds vs milliseconds — anything past year 9999 in seconds
+            # (> ~253402300799) is millis. Use 1e12 as a safe threshold.
+            ts = float(start_time)
+            if ts > 1e12:
+                ts = ts / 1000.0
+            start_dt = _dt.fromtimestamp(ts, tz=timezone_utc)
+        else:
+            s = str(start_time).strip()
+            # Numeric string?
+            try:
+                ts = float(s)
+                if ts > 1e12:
+                    ts = ts / 1000.0
+                start_dt = _dt.fromtimestamp(ts, tz=timezone_utc)
+            except ValueError:
+                start_dt = _dt.fromisoformat(s.replace("Z", "+00:00"))
+    except Exception as exc:
+        raise ValueError(f"could not parse start_time {start_time!r}: {exc}")
+
+    res = await call_function(
+        "sp_ingest_meeting_from_fireflies",
+        fireflies_meeting_id,
+        meeting_url,
+        title,
+        start_dt,
+        int(duration_minutes),
+        advisor_email,
+        client_email,
+        client_display_name,
+        transcript_text,
+        actor_email,
+        idempotency_key,
+    )
+    if res.ok:
+        return res.result
+    # 1022 is the natural-key replay path — return the cached result, not an error.
+    if res.errornumber == 1022:
+        return res.result or {"was_replay": True}
+    if res.errornumber in (1008, 1020, 1021):
+        raise ValueError(res.errormessage)
+    raise RuntimeError(res.errormessage)
+
+
+async def proc_get_external_event_id(meeting_id: str) -> str | None:
+    """Return the Google Calendar event_id stored on meeting_external_sync, or None."""
+    if not meeting_id:
+        return None
+    from db.pool import get_pool
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT external_meeting_id FROM meeting_external_sync "
+            "WHERE meeting_id = $1::uuid AND booking_provider = 'google_meet' "
+            "ORDER BY updated_at DESC LIMIT 1",
+            meeting_id,
+        )
+    if row is None:
+        return None
+    val = row["external_meeting_id"]
+    if not val or str(val).startswith("pending-"):
+        return None
+    return str(val)
+
+
+async def proc_meeting_lifecycle_state(meeting_id: str) -> dict | None:
+    """
+    fn_meeting_lifecycle_state — read-only derivation of the meeting's
+    current lifecycle bucket (scheduled | in_progress | completed |
+    transcribed | extracted | validated | cancelled | no_show).
+
+    Returns None when the meeting is not found (function returns zero rows
+    rather than erroring).
+    """
+    if not meeting_id:
+        return None
+
+    from db.pool import get_pool
+
+    async with get_pool().acquire() as conn:
+        row = await conn.fetchrow(
+            "SELECT * FROM fn_meeting_lifecycle_state($1::uuid)",
+            meeting_id,
+        )
+
+    if row is None:
+        return None
+
+    d = dict(row)
+    # Stringify UUIDs / timestamps for JSON-safe output.
+    for k, v in list(d.items()):
+        if isinstance(v, uuid.UUID):
+            d[k] = str(v)
+        elif isinstance(v, datetime):
+            d[k] = v.isoformat()
+    return d
 
 

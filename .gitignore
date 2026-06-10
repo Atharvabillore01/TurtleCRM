@@ -43,6 +43,11 @@ desktop.ini
 
 # ─── Docker ───────────────────────────────────────────────────────────────────
 docker-compose.override.yml
+docker-compose*.yml
+Dockerfile
+
+# ─── Documentation (kept local, not committed) ───────────────────────────────
+*.md
 
 # ─── Prisma ───────────────────────────────────────────────────────────────────
 prisma/migrations/
@@ -53,9 +58,16 @@ coverage/
 
 # ─── Misc ─────────────────────────────────────────────────────────────────────
 *.pem
-*.keytranscripts/
+*.key
+
+# ─── Local-only data dumps ───────────────────────────────────────────────────
+transcripts/
 
 # ─── Database dumps / SP exports ─────────────────────────────────────────────
 procs/
 procs.zip
 turtle - Copy/
+
+# ─── Python build artifacts ──────────────────────────────────────────────────
+__pycache__/
+*.pyc

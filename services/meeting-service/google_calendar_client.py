@@ -134,6 +134,79 @@ def _create_event_sync(
     }
 
 
+async def patch_meet_event(
+    settings,
+    event_id: str,
+    new_start: str,
+    new_end: str,
+    timezone: str = "Asia/Kolkata",
+    calendar_id: str = "primary",
+) -> dict:
+    """Patch an existing event's start/end time. Google emails attendees automatically
+    because we pass sendUpdates='all'. Returns the updated event resource."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None,
+        _patch_event_sync,
+        settings, event_id, new_start, new_end, timezone, calendar_id,
+    )
+
+
+def _patch_event_sync(settings, event_id, new_start, new_end, tz, calendar_id):
+    creds = _build_credentials(settings)
+    service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+
+    start_dt = _parse_datetime(new_start)
+    end_dt   = _parse_datetime(new_end)
+
+    body = {
+        "start": {"dateTime": start_dt.isoformat(), "timeZone": tz},
+        "end":   {"dateTime": end_dt.isoformat(),   "timeZone": tz},
+    }
+
+    updated = (
+        service.events()
+        .patch(
+            calendarId=calendar_id,
+            eventId=event_id,
+            body=body,
+            sendUpdates="all",
+        )
+        .execute()
+    )
+
+    logger.info("google_meet_patched", extra={
+        "event_id":  event_id,
+        "new_start": start_dt.isoformat(),
+        "new_end":   end_dt.isoformat(),
+    })
+    return updated
+
+
+async def delete_meet_event(
+    settings,
+    event_id: str,
+    calendar_id: str = "primary",
+) -> None:
+    """Delete a Google Calendar event. Attendees receive a cancellation email
+    automatically because we pass sendUpdates='all'."""
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(
+        None, _delete_event_sync, settings, event_id, calendar_id,
+    )
+
+
+def _delete_event_sync(settings, event_id, calendar_id):
+    creds = _build_credentials(settings)
+    service = build("calendar", "v3", credentials=creds, cache_discovery=False)
+    service.events().delete(
+        calendarId=calendar_id,
+        eventId=event_id,
+        sendUpdates="all",
+    ).execute()
+    logger.info("google_meet_deleted", extra={"event_id": event_id})
+
+
 def _parse_datetime(value: str) -> datetime:
     s = value.strip()
     # fromisoformat handles fractional seconds and offsets; normalise Z → +00:00.

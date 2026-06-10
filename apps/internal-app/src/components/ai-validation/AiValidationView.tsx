@@ -2,6 +2,80 @@ import React, { useState } from "react";
 import RecentMeetingRail from "./RecentMeetingRail";
 import MeetingOverview from "./MeetingOverview";
 import ReviewModal, { mapCategoryToTouchPoint } from "./ReviewModal";
+import ValidationHistoryBanner from "./ValidationHistoryBanner";
+
+/**
+ * Read-only panel for the AdvisoryAgent call-quality / coaching report
+ * (migration 027). This is NOT a CRM field — it carries no validation
+ * actions. Renders nothing when there is no meaningful content.
+ */
+function CallAnalysisPanel({ callAnalysis }: { callAnalysis: any }) {
+  if (!callAnalysis || typeof callAnalysis !== "object") return null;
+
+  const coverage   = (callAnalysis.agenda_coverage || "").trim();
+  const overall    = (callAnalysis.how_call_could_be_better || "").trim();
+  const questions  = Array.isArray(callAnalysis.questions_advisor_could_ask)
+    ? callAnalysis.questions_advisor_could_ask.filter(Boolean) : [];
+  const gaps       = Array.isArray(callAnalysis.information_gaps)
+    ? callAnalysis.information_gaps.filter(Boolean) : [];
+  const coaching   = Array.isArray(callAnalysis.communication_coaching)
+    ? callAnalysis.communication_coaching.filter(Boolean) : [];
+
+  // Nothing meaningful → render nothing (the agent returns {} when it has
+  // no grounded analysis, and we never force-fill).
+  if (!coverage && !overall && !questions.length && !gaps.length && !coaching.length) {
+    return null;
+  }
+
+  const Block = ({ title, items }: { title: string; items: string[] }) =>
+    items.length === 0 ? null : (
+      <div className="mt-3">
+        <p className="m-0 text-[11px] font-black uppercase tracking-[0.04em] text-muted">{title}</p>
+        <ul className="mt-1 mb-0 pl-4 list-disc grid gap-1">
+          {items.map((it, i) => (
+            <li key={i} className="text-sm text-ink">{it}</li>
+          ))}
+        </ul>
+      </div>
+    );
+
+  return (
+    <section
+      className="mt-4 p-4 border border-line rounded-lg bg-[rgba(255,255,255,0.96)] shadow-card min-w-0"
+      aria-label="Call analysis and advisor coaching"
+    >
+      <div className="flex items-center justify-between gap-3 mb-1">
+        <div>
+          <h2>Call Analysis &amp; Advisor Coaching</h2>
+          <p className="mt-1 text-muted text-xs m-0">
+            AI-generated review of how the call met its agenda. Informational — not a CRM field.
+          </p>
+        </div>
+        <span className="text-[9px] px-1.5 py-0.5 rounded border border-line bg-surface-soft uppercase tracking-wider whitespace-nowrap">
+          AI generated
+        </span>
+      </div>
+
+      {coverage && (
+        <div className="mt-3">
+          <p className="m-0 text-[11px] font-black uppercase tracking-[0.04em] text-muted">Agenda coverage</p>
+          <p className="mt-1 mb-0 text-sm text-ink">{coverage}</p>
+        </div>
+      )}
+
+      <Block title="Questions the advisor could ask" items={questions} />
+      <Block title="Information gaps" items={gaps} />
+      <Block title="Communication coaching" items={coaching} />
+
+      {overall && (
+        <div className="mt-3">
+          <p className="m-0 text-[11px] font-black uppercase tracking-[0.04em] text-muted">How the call could be better</p>
+          <p className="mt-1 mb-0 text-sm text-ink">{overall}</p>
+        </div>
+      )}
+    </section>
+  );
+}
 
 export default function AiValidationView({
   recentMeetings,
@@ -28,7 +102,17 @@ export default function AiValidationView({
   onTaskUndoDecline,
   onTaskUpdate,
   onManualTask,
+  isExtractionValidated = false,
+  onValidateAll,
+  onUnvalidate,
+  historyRefreshKey = 0,
+  listFilter = "all",
+  setListFilter,
+  counts = { pending: 0, validated: 0, all: 0 },
+  children,
 }: any) {
+  // Migration 027: standalone AdvisoryAgent coaching report (not a CRM field).
+  const callAnalysis = selectedMeeting?.callAnalysis ?? null;
   const [isReviewOpen, setIsReviewOpen] = useState(false);
   const [reviewTab, setReviewTab] = useState("attributes");
 
@@ -60,6 +144,9 @@ export default function AiValidationView({
           meetings={recentMeetings}
           selectedMeetingId={selectedMeetingId}
           onSelectMeeting={onSelectMeeting}
+          listFilter={listFilter}
+          setListFilter={setListFilter}
+          counts={counts}
         />
 
         <section
@@ -74,7 +161,50 @@ export default function AiValidationView({
                 Advisor: {selectedClient.advisor} | Location: {selectedClient.location}
               </span>
             </div>
+            <div className="flex items-center gap-2 mobile:flex-col mobile:items-stretch">
+              {isExtractionValidated ? (
+                <>
+                  <span
+                    className="inline-flex items-center gap-1.5 min-h-[34px] px-3 border border-[rgba(46,222,190,0.45)] rounded-full bg-[#d8fff6] text-[#0f6e5d] text-xs font-extrabold"
+                    title="This extraction has been validated and is locked from edits"
+                  >
+                    <span aria-hidden="true">🔒</span> Validated · locked
+                  </span>
+                  {onUnvalidate && (
+                    <button
+                      type="button"
+                      onClick={onUnvalidate}
+                      className="inline-flex items-center min-h-[34px] px-3 border border-[rgba(202,78,78,0.45)] rounded-lg bg-white text-red text-xs font-black uppercase tracking-wider hover:bg-[rgba(202,78,78,0.06)]"
+                      title="Reopen this extraction for editing (audit row will be created)"
+                    >
+                      ↺ Unvalidate
+                    </button>
+                  )}
+                </>
+              ) : (
+                onValidateAll && (
+                  <button
+                    type="button"
+                    onClick={onValidateAll}
+                    className="inline-flex items-center min-h-[34px] px-4 border border-[#138773] rounded-lg bg-[#138773] text-white text-xs font-black uppercase tracking-wider hover:opacity-90"
+                    title="Mark this extraction as reviewed. Locks editing."
+                  >
+                    ✓ Validate extraction
+                  </button>
+                )
+              )}
+            </div>
           </div>
+
+          {/* Validation-history banner — appears once any validate/unvalidate
+              event exists for this extraction. Refetches when historyRefreshKey
+              changes (i.e. immediately after a successful transition). */}
+          {selectedMeeting?.id && (
+            <ValidationHistoryBanner
+              extractionId={selectedMeeting.id}
+              refreshKey={historyRefreshKey}
+            />
+          )}
 
           {/* Simple Task Tracker Snapshot */}
           <section className="p-4 border border-line rounded-lg bg-[rgba(255,255,255,0.96)] shadow-card min-w-0 mb-4" aria-label="Meeting tasks snapshot">
@@ -144,6 +274,10 @@ export default function AiValidationView({
               onStartReview={() => openReview("attributes")}
             />
           </section>
+
+          {/* Call Analysis — read-only AdvisoryAgent coaching report (027).
+              Not a CRM field; informational only, no validation actions. */}
+          <CallAnalysisPanel callAnalysis={callAnalysis} />
         </section>
       </div>
 
@@ -174,6 +308,9 @@ export default function AiValidationView({
           initialActiveTab={reviewTab}
         />
       )}
+
+      {/* Reject-with-replacement modal lives here so it overlays the workspace */}
+      {children}
     </>
   );
 }

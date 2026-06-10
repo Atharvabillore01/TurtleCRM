@@ -8,9 +8,11 @@ import { LoginPage }         from "./pages/LoginPage";
 import { OAuthCallbackPage } from "./pages/OAuthCallbackPage";
 import DashboardPage         from "./routes/DashboardPage";
 import AiValidationPage      from "./routes/AiValidationPage";
+import TokenUsagePage        from "./routes/TokenUsagePage";
 import ClientsPage           from "./routes/ClientsPage";
 import LeadJourneyPage       from "./routes/LeadJourneyPage";
 import SchedulingPage        from "./routes/SchedulingPage";
+import IngestMeetingPage     from "./routes/IngestMeetingPage";
 import MeetingsPage          from "./routes/MeetingsPage";
 import ClientJourneyPage     from "./routes/ClientJourneyPage";
 import EmailTrackerPage      from "./routes/EmailTrackerPage";
@@ -41,7 +43,9 @@ export default function App() {
             <Route path="clients"           element={<ClientsPage />} />
             <Route path="lead-journey"      element={<LeadJourneyPage />} />
             <Route path="ai-validation"     element={<AiValidationPage />} />
+            <Route path="token-usage"       element={<TokenUsagePage />} />
             <Route path="scheduling"        element={<SchedulingPage />} />
+            <Route path="ingest"            element={<IngestMeetingPage />} />
             <Route path="tasks"             element={<TasksPage />} />
             <Route path="meetings"          element={<MeetingsPage />} />
             <Route path="client-journey"    element={<ClientJourneyPage />} />

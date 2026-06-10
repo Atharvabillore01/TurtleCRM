@@ -118,7 +118,7 @@ function TodaySchedule({ records }: any) {
   );
 }
 
-export default function SchedulingView({ records, schedulingSearch, setSchedulingSearch, onOpenModal }: any) {
+export default function SchedulingView({ records, schedulingSearch, setSchedulingSearch, onOpenModal, onCancel, onReschedule }: any) {
   const { sortKey, sortDirection, handleSort, applySort } = useTableSort("datetime" as any, "asc");
 
   const activeRecords = useMemo(() => records.filter((item: any) => item.status !== "Completed" && item.status !== "Canceled"), [records]);
@@ -211,6 +211,8 @@ export default function SchedulingView({ records, schedulingSearch, setSchedulin
           sortKey={sortKey}
           sortDirection={sortDirection}
           onSort={handleSort}
+          onCancel={onCancel}
+          onReschedule={onReschedule}
         />
         <TablePagination {...pagination} onPageChange={pagination.setCurrentPage} />
       </section>

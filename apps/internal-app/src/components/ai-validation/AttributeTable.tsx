@@ -1,5 +1,27 @@
 import React from "react";
 
+// confidence_level → human-readable label (mirrors the crm-agent levels).
+const CONFIDENCE_LABELS: Record<string, string> = {
+  exact_quote:       "Exact quote",
+  clearly_inferable: "Clearly inferable",
+  estimated:         "Estimated",
+  indirect:          "Indirect",
+  speculative:       "Speculative",
+  not_extracted:     "Not extracted",
+};
+
+function confidencePct(c: unknown): number | null {
+  return typeof c === "number" && !Number.isNaN(c) ? Math.round(c * 100) : null;
+}
+
+// Chip tone by confidence band: high = teal, medium = amber, low = red.
+function confidenceTone(c: unknown): string {
+  if (typeof c !== "number") return "bg-gray-100 text-gray-500";
+  if (c >= 0.8) return "bg-[#d8fff6] text-[#0f6e5d]";
+  if (c >= 0.6) return "bg-amber-100 text-amber-700";
+  return "bg-[#ffe8e5] text-red";
+}
+
 export default function AttributeTable({
   rows,
   draftValues,
@@ -22,7 +44,9 @@ export default function AttributeTable({
         </thead>
         <tbody>
           {rows.map((row: any) => {
-            const isEditing = editingKey === row.attribute.id;
+            // Defensive: even if a stale editingKey points at this row,
+            // refuse to enter edit mode when the extraction is locked.
+            const isEditing = editingKey === row.attribute.id && !row.readOnly;
             const draftValue = draftValues[row.attribute.id] ?? row.displayValue ?? "";
 
             return (
@@ -63,6 +87,43 @@ export default function AttributeTable({
                       {row.isRejected && (
                         <small className="text-red text-[11px] font-extrabold">Rejected in this meeting</small>
                       )}
+
+                      {/* Confidence · confidence type · evidence */}
+                      {!row.isNull &&
+                        (confidencePct(row.confidence) !== null ||
+                          row.confidence_level ||
+                          row.source) && (
+                          <div className="flex flex-col gap-1 mt-0.5 w-full">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {confidencePct(row.confidence) !== null && (
+                                <span
+                                  className={`inline-flex items-center px-2 py-[2px] rounded-full text-[10px] font-black ${confidenceTone(
+                                    row.confidence,
+                                  )}`}
+                                  title="AI confidence score"
+                                >
+                                  {confidencePct(row.confidence)}%
+                                </span>
+                              )}
+                              {row.confidence_level && (
+                                <span
+                                  className="inline-flex items-center px-2 py-[2px] rounded-full text-[10px] font-bold bg-[rgba(46,222,190,0.10)] text-[#137765] uppercase tracking-wide"
+                                  title="Confidence type"
+                                >
+                                  {CONFIDENCE_LABELS[row.confidence_level] ?? row.confidence_level}
+                                </span>
+                              )}
+                            </div>
+                            {row.source && (
+                              <p
+                                className="text-[11px] text-gray-500 italic leading-snug [overflow-wrap:anywhere]"
+                                title={row.source}
+                              >
+                                “{row.source.length > 220 ? row.source.slice(0, 220) + "…" : row.source}”
+                              </p>
+                            )}
+                          </div>
+                        )}
                     </div>
                   )}
                 </td>
@@ -86,12 +147,22 @@ export default function AttributeTable({
                         {"✕"}
                       </button>
                     </div>
+                  ) : row.readOnly ? (
+                    // Extraction is validated — no edits allowed. Just show
+                    // a lock chip so reviewers know why nothing's clickable.
+                    <span
+                      className="inline-flex items-center justify-center min-h-[30px] px-3 border border-[rgba(46,222,190,0.45)] rounded-lg bg-[#d8fff6] text-[#0f6e5d] text-[11px] font-black font-montserrat uppercase tracking-wider"
+                      title="This extraction is validated and locked"
+                    >
+                      Locked
+                    </span>
                   ) : (
                     <div className="flex items-center gap-1.5 flex-wrap">
                       <button
-                        className="flex justify-center items-center flex-none w-[34px] min-h-[30px] border border-line rounded-lg bg-white text-ink text-[15px] font-black font-montserrat leading-none cursor-pointer"
+                        className="flex justify-center items-center flex-none w-[34px] min-h-[30px] border border-line rounded-lg bg-white text-ink text-[15px] font-black font-montserrat leading-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-45"
                         type="button"
                         aria-label="Edit"
+                        disabled={row.readOnly}
                         onClick={() => {
                           setEditingKey(row.attribute.id);
                           setDraftValues((current: any) => ({
@@ -106,7 +177,7 @@ export default function AttributeTable({
                         className="flex justify-center items-center flex-1 min-w-[82px] min-h-[30px] border border-[rgba(46,222,190,0.45)] rounded-lg bg-white text-[#137765] text-xs font-black font-montserrat leading-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-45"
                         type="button"
                         aria-label="Approve"
-                        disabled={row.isNull || row.isApproved}
+                        disabled={row.isNull || row.isApproved || row.readOnly}
                         onClick={() => onApprove(row.attribute.id, row.displayValue)}
                       >
                         {"✓"}
@@ -115,7 +186,7 @@ export default function AttributeTable({
                         className="flex justify-center items-center flex-1 min-w-[82px] min-h-[30px] border border-[rgba(202,78,78,0.35)] rounded-lg bg-white text-red text-xs font-black font-montserrat leading-none cursor-pointer disabled:cursor-not-allowed disabled:opacity-45"
                         type="button"
                         aria-label="Reject"
-                        disabled={row.isNull || row.isRejected}
+                        disabled={row.isNull || row.isRejected || row.readOnly}
                         onClick={() => onReject(row.attribute.id)}
                       >
                         {"✕"}

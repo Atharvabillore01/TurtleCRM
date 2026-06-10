@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from auth_dep import get_current_team_user
 from db.meeting_procs import (
+    proc_extraction_token_usage,
     proc_get_extraction,
     proc_list_extractions,
     proc_patch_extraction_fields,
@@ -32,6 +33,22 @@ async def get_extraction(extraction_id: str):
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
     return row if isinstance(row, dict) else asdict(row)
+
+
+@router.get("/{extraction_id}/token-usage")
+async def get_extraction_token_usage(extraction_id: str):
+    """Per-agent token consumption for one extraction (Token Usage screen).
+
+    Returns a list of { agent, input_tokens, output_tokens, total_tokens }
+    ordered by total_tokens DESC, plus a computed grand total. Empty `agents`
+    for pre-025 extractions (token usage was not yet persisted)."""
+    agents = await proc_extraction_token_usage(extraction_id)
+    total = {
+        "input_tokens":  sum(a["input_tokens"]  for a in agents),
+        "output_tokens": sum(a["output_tokens"] for a in agents),
+        "total_tokens":  sum(a["total_tokens"]  for a in agents),
+    }
+    return {"extraction_id": extraction_id, "agents": agents, "total": total}
 
 
 # ── Per-field reviewer edits ──────────────────────────────────────────────────
@@ -73,6 +90,9 @@ async def patch_extraction_fields(
             changed_by=str(team_user_id),
             updates=[u.model_dump(exclude_none=True) for u in req.updates],
         )
+    except PermissionError as exc:
+        # 1018 → extraction is validated, edits blocked
+        raise HTTPException(status_code=status.HTTP_423_LOCKED, detail=str(exc))
     except ValueError as exc:
         # 1015 → version mismatch comes back as ValueError
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc))
@@ -89,7 +109,9 @@ async def patch_extraction_fields(
 # ── Approve / validate the whole extraction ──────────────────────────────────
 
 class ValidateExtractionRequest(BaseModel):
-    validation_notes: Optional[str] = None
+    """Phase 2: `reason` is required (≥5 chars). `notes` is optional extra context."""
+    reason: str
+    notes: Optional[str] = None
 
 
 @router.post("/{extraction_id}/validate", status_code=status.HTTP_200_OK)
@@ -98,19 +120,71 @@ async def validate_extraction(
     req: ValidateExtractionRequest,
     team_user_id: UUID = Depends(get_current_team_user),
 ):
-    """Mark the extraction as reviewed and authoritative. `validated_by` is JWT-derived."""
+    """Mark the extraction as reviewed and authoritative. `validated_by` is JWT-derived.
+    Writes an append-only row in extraction_validation_audit."""
     try:
         result = await proc_validate_extraction(
             extraction_id=extraction_id,
             validated_by=str(team_user_id),
-            validation_notes=req.validation_notes,
+            reason=req.reason,
+            notes=req.notes,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     except RuntimeError as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
     logger.info("extraction_validated", extra={
         "extraction_id": extraction_id,
-        "validated_by": str(team_user_id),
+        "validated_by":  str(team_user_id),
     })
     return result
+
+
+# ── Unvalidate (revert) the whole extraction ─────────────────────────────────
+
+class UnvalidateExtractionRequest(BaseModel):
+    """Phase 2: reverting a validated extraction REQUIRES a reason (≥5 chars)."""
+    reason: str
+    notes: Optional[str] = None
+
+
+@router.post("/{extraction_id}/unvalidate", status_code=status.HTTP_200_OK)
+async def unvalidate_extraction(
+    extraction_id: str,
+    req: UnvalidateExtractionRequest,
+    team_user_id: UUID = Depends(get_current_team_user),
+):
+    """Revert a previously-validated extraction back to editable state.
+    Writes an append-only row in extraction_validation_audit."""
+    from db.meeting_procs import proc_unvalidate_extraction
+
+    try:
+        result = await proc_unvalidate_extraction(
+            extraction_id=extraction_id,
+            unvalidated_by=str(team_user_id),
+            reason=req.reason,
+            notes=req.notes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc))
+    logger.info("extraction_unvalidated", extra={
+        "extraction_id":  extraction_id,
+        "unvalidated_by": str(team_user_id),
+        "audit_id":       (result or {}).get("audit_id"),
+    })
+    return result
+
+
+# ── Validation history feed (banner data) ────────────────────────────────────
+
+@router.get("/{extraction_id}/validation-history", status_code=status.HTTP_200_OK)
+async def get_validation_history(
+    extraction_id: str,
+    limit: int = 10,
+    _team_user_id: UUID = Depends(get_current_team_user),
+):
+    """Append-only audit log of validate / unvalidate transitions, newest-first."""
+    from db.meeting_procs import proc_validation_history
+    return await proc_validation_history(extraction_id, limit=limit)

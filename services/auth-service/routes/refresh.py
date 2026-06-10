@@ -4,9 +4,9 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from jose import JWTError
 
 from redis_client import get_redis
-from jwt_utils import verify_refresh_token, refresh_token_key
+from jwt_utils import verify_refresh_token, refresh_token_key, refresh_token_ttl, sign_access_token
 from eventbus import publish_event
-from auth_utils import issue_tokens, set_token_cookies
+from auth_utils import set_access_cookie
 from logger import get_logger
 
 router = APIRouter(tags=["auth"])
@@ -15,6 +15,18 @@ logger = get_logger("auth-service")
 
 @router.post("/auth/refresh")
 async def refresh_tokens(request: Request, response: Response):
+    """
+    Mint a fresh access token for an EXISTING session.
+
+    Session model (non-rotating): the refresh token is a stable, server-side
+    session credential. Redis (`refresh:{userId}:{tokenId}`) is the source of
+    truth for validity — present ⇒ session alive, deleted ⇒ revoked (logout /
+    admin). We do NOT delete or re-issue the refresh token here, so concurrent
+    or retried refreshes from the same browser can never invalidate each other
+    (the single-use rotation that caused spurious logouts is gone). The session
+    ends when the refresh JWT/Redis key expires (REFRESH_TTL after login) or is
+    explicitly revoked.
+    """
     token = request.cookies.get("refresh_token")
     if not token:
         raise HTTPException(401, "No refresh token")
@@ -27,6 +39,7 @@ async def refresh_tokens(request: Request, response: Response):
 
     user_id = payload["userId"]
     token_id = payload["tokenId"]
+    session_id = payload["sessionId"]
     user_type = payload.get("userType", "client")
     role = payload.get("role", user_type)
 
@@ -35,12 +48,15 @@ async def refresh_tokens(request: Request, response: Response):
     stored = await r.get(key)
 
     if not stored:
-        logger.warning("token_refresh_failed", extra={"reason": "token_revoked_or_used", "user_id": user_id})
-        raise HTTPException(401, "Refresh token revoked or already used")
+        logger.warning("token_refresh_failed", extra={"reason": "session_revoked_or_expired", "user_id": user_id})
+        raise HTTPException(401, "Session revoked or expired")
 
-    await r.delete(key)
+    # Sliding session: extend the server-side session lifetime on activity.
+    # (Capped by the refresh JWT's own exp; a fresh login re-issues the JWT.)
+    await r.expire(key, refresh_token_ttl())
 
-    access_token, refresh_token, session_id = await issue_tokens(user_id, user_type, role)
+    # Mint a NEW access token bound to the SAME session. Refresh token untouched.
+    access_token = sign_access_token(user_id, user_type, role, session_id)
 
     await publish_event("auth.token.refreshed", {
         "topic": "auth.token.refreshed",
@@ -49,9 +65,9 @@ async def refresh_tokens(request: Request, response: Response):
         "refreshedAt": datetime.now(timezone.utc).isoformat(),
     })
 
-    logger.info("token_refreshed", extra={"user_id": user_id, "new_session_id": session_id})
+    logger.info("token_refreshed", extra={"user_id": user_id, "session_id": session_id})
 
-    set_token_cookies(response, access_token, refresh_token)
+    set_access_cookie(response, access_token)
     return {"accessToken": access_token}
 
 
