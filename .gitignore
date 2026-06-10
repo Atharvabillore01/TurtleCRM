@@ -48,6 +48,7 @@ Dockerfile
 
 # ─── Documentation (kept local, not committed) ───────────────────────────────
 *.md
+*.txt
 
 # ─── Prisma ───────────────────────────────────────────────────────────────────
 prisma/migrations/
