@@ -7,7 +7,7 @@ get_pool() — no import-time side effects.
 
 The DSN comes from `DATABASE_URL` (settings) — same env var as the rest
 of the stack.
-"""
+""" 
 
 from __future__ import annotations
 
